@@ -132,7 +132,7 @@ python scripts/build_story_bible.py --config config.yaml --limit-chunks 3 --verb
 
 ```text
 data/story_bible/
-├─ characters.md
+├─ characters.md              # 所有人物汇总（build_story_bible.py 生成）
 ├─ world.md
 ├─ timeline.md
 ├─ plot_threads.md
@@ -141,10 +141,16 @@ data/story_bible/
 ├─ style.md
 ├─ glossary.md
 ├─ _merged_data.json
-└─ .build_cache/              # 断点续跑缓存，生成后出现
+├─ .build_cache/              # 断点续跑缓存，不参与检索
+└─ generated/
+   └─ characters/             # split_characters.py 生成的单人物文件
+      ├─ 林清雪.md
+      ├─ 凤倾汐.md
+      └─ （共21个，每人一文件）
 ```
 
-`.build_cache/` 不参与 Retriever 检索，因为 Retriever 只读取 `data/story_bible/*.md`。
+`Retriever._load_bible()` 使用 `rglob("*.md")` 递归扫描，`generated/` 下的文件会自动进入 BM25 索引。
+注意：`characters.md` 保留不删，单人物拆分文件与之共存于同一索引，对出现频率较低的配角查询精度有提升。
 
 ## Retrieval Flow
 

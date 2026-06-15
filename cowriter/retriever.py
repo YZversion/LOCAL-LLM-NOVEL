@@ -45,13 +45,14 @@ class Retriever:
     def _load_bible(self):
         self._docs = []
         self._entity_names = set()
-        for f in sorted(self.bible_path.glob("*.md")):
+        for f in sorted(self.bible_path.rglob("*.md")):
             stem = f.stem
             self._entity_names.add(stem)
             # 把文件名（人名/地名/功法名等）加入 jieba 词典，提高分词准确性
             jieba.add_word(stem, freq=10000)
             self._docs.append({
                 "source": stem,
+                "path": f,
                 "text": f.read_text(encoding="utf-8"),
             })
         if self._docs:
@@ -61,27 +62,70 @@ class Retriever:
     def reload_bible(self):
         self._load_bible()
 
-    def search_bible(self, query: str, top_k: int | None = None) -> list[dict]:
-        """返回 {source, text, score}，text 截断至 _BIBLE_TEXT_MAX 字。"""
+    def _stem_priority(self, path: Path) -> int:
+        """根目录手写卡片=0（最高），generated/=1，其他子目录=2。"""
+        rel = path.relative_to(self.bible_path)
+        if len(rel.parts) == 1:
+            return 0
+        return 1 if rel.parts[0] == "generated" else 2
+
+    def search_bible(self, query: str, top_k: int | None = None,
+                     entities: list[str] | None = None) -> list[dict]:
+        """返回 {source, text, score}，text 截断至 _BIBLE_TEXT_MAX 字。
+        提供 entities 时，文件名精确匹配的文档强制排在 BM25 结果之前：
+          根目录手写卡片 > generated/characters/ > stem 含 entity > BM25
+        """
         if not self._bm25:
             return []
         k = top_k or self.cfg["retrieval"]["bible_top_k"]
+        seen: set[int] = set()
+        results: list[dict] = []
+
+        # ── 文件名精确 / 弱匹配提权 ──────────────────────────────────────
+        if entities:
+            exact: list[tuple[int, int]] = []   # (path_priority, doc_idx)
+            weak: list[int] = []
+            for entity in entities:
+                for i, doc in enumerate(self._docs):
+                    stem = doc["source"]
+                    p = doc.get("path")
+                    if stem == entity:
+                        prio = self._stem_priority(p) if p else 2
+                        exact.append((prio, i))
+                    elif entity in stem:
+                        weak.append(i)
+            exact.sort(key=lambda x: x[0])
+            for _, i in exact:
+                if i not in seen:
+                    seen.add(i)
+                    doc = self._docs[i]
+                    results.append({"source": doc["source"],
+                                    "text": doc["text"][:_BIBLE_TEXT_MAX],
+                                    "score": 9999.0})
+            for i in weak:
+                if i not in seen:
+                    seen.add(i)
+                    doc = self._docs[i]
+                    results.append({"source": doc["source"],
+                                    "text": doc["text"][:_BIBLE_TEXT_MAX],
+                                    "score": 9998.0})
+
+        # ── BM25 结果（去重后追加）──────────────────────────────────────
         tokens = self._tokenize(query)
-        if not tokens:
-            return []
-        scores = self._bm25.get_scores(tokens)
-        ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
-        results = []
-        for i in ranked[:k]:
-            if scores[i] <= 0:
-                continue
-            doc = self._docs[i]
-            results.append({
-                "source": doc["source"],
-                "text": doc["text"][:_BIBLE_TEXT_MAX],
-                "score": round(float(scores[i]), 4),
-            })
-        return results
+        if tokens:
+            scores = self._bm25.get_scores(tokens)
+            ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
+            for i in ranked:
+                if scores[i] <= 0:
+                    break
+                if i not in seen:
+                    seen.add(i)
+                    doc = self._docs[i]
+                    results.append({"source": doc["source"],
+                                    "text": doc["text"][:_BIBLE_TEXT_MAX],
+                                    "score": round(float(scores[i]), 4)})
+
+        return results[:k]
 
     # ── 原文 grep ────────────────────────────────────────────────────────────
 
@@ -162,7 +206,7 @@ class Retriever:
 
         # bible query = 实体名拼接 + 最近 150 字（让 BM25 有足够上下文）
         bible_query = " ".join(entities) + " " + context[-150:]
-        bible_hits = self.search_bible(bible_query)
+        bible_hits = self.search_bible(bible_query, entities=entities)
 
         # grep 前 3 个实体，结果去重
         seen_grep: set[str] = set()
