@@ -1,0 +1,41 @@
+model:
+  # 阶段2:Ollama 推理
+  provider: ollama
+  ollama_model: "hf.co/DavidAU/Qwen2.5-MOE-2X1.5B-DeepSeek-Uncensored-Censored-4B-gguf:Q4_K_M"
+  ollama_base_url: "http://localhost:11434"
+
+  # 阶段4:微调基座(届时解注释)
+  # hf_base_model: "Qwen/Qwen2.5-7B-Instruct"
+
+paths:
+  raw_data: "data/raw"
+  processed_data: "data/processed"
+  story_bible: "data/story_bible"
+  models: "models"
+  outputs: "outputs"
+
+retrieval:
+  top_k: 5            # grep 最多返回几个命中块
+  bible_top_k: 3      # 设定集 BM25 最多返回几条
+  grep_context_lines: 3  # 命中行前后各保留几行
+
+session:
+  max_recent_chars: 2000   # 喂给模型的「当前上文」窗口
+  summary_trigger_chars: 4000  # 超过此字数触发滚动摘要压缩
+  output_tokens: 600       # 单次续写最大 token 数
+
+generation:
+  temperature: 0.85
+  top_p: 0.90
+  repeat_penalty: 1.10
+
+# 阶段4:QLoRA 超参(届时解注释)
+# training:
+#   lora_r: 16
+#   lora_alpha: 32
+#   lora_dropout: 0.05
+#   learning_rate: 2.0e-4
+#   num_epochs: 3
+#   batch_size: 1
+#   grad_accumulation: 8
+#   max_seq_len: 1024
