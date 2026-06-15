@@ -41,9 +41,15 @@ class Session:
         old_text = self.accepted_text[:-keep]
         self.accepted_text = self.accepted_text[-keep:]
 
-        new_chunk_summary = self._chat(
-            build_summary_prompt(old_text), max_tokens=200
-        )
+        try:
+            new_chunk_summary = self._chat(
+                build_summary_prompt(old_text), max_tokens=200
+            )
+        except Exception:
+            new_chunk_summary = ""
+        # 小模型常返回空或乱码，兜底用原文前 200 字保留真实剧情上下文
+        if not new_chunk_summary or len(new_chunk_summary) < 20:
+            new_chunk_summary = f"[前情节选] {old_text[:200].strip()}"
         self.summary = (
             (self.summary + "\n" + new_chunk_summary).strip()
             if self.summary

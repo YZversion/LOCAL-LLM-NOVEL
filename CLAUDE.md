@@ -33,14 +33,14 @@
 
 ```
 [✓] 阶段0  repo 骨架 + 环境配置文件
-[~] 阶段2  零训练合写回路（5/7 通过，剩 /保存 + 摘要压缩待验证）
+[✓] 阶段2  零训练合写回路（7/7 通过）
 [ ] 阶段1  数据清洗（prepare_data.py，用户自有脚本）
 [ ] 阶段3  文风评测（eval_style.py）
 [ ] 阶段4  QLoRA 微调
 [ ] 阶段5  向量 RAG（按需）
 ```
 
-**当前焦点：阶段2 收尾（第6、7项）**
+**当前焦点：阶段2 已完成，下一步待决策（Web UI vs 阶段2.5 原文检索增强）**
 
 ---
 
@@ -51,8 +51,8 @@
 - [✓] `python -m cowriter.app` 可启动，不崩溃
 - [~] 粘贴上文 → 生成 → 接受 → 再生成循环（模型偶发空输出，用 `/重试` 可绕过）
 - [✓] `/检索 <人物名>` 在有设定集文件时能返回结果（已用《风丝引》素材验证）
-- [ ] `/保存` 在 `outputs/` 生成 txt 文件
-- [ ] 摘要压缩：输入超过 4000 字后 `session.summary` 非空
+- [✓] `/保存` 在 `outputs/` 生成 txt 文件，路径打印清楚
+- [✓] 摘要压缩：输入超过 4000 字后 `session.summary` 非空，`【剧情摘要】`块进入下一轮 prompt
 
 ---
 
@@ -75,15 +75,20 @@
 ## 已完成的代码改动记录
 
 ### cowriter/app.py
-- 新增 `/上下文`：不调模型，打印 prompt 各段字数 + 前 2000 字预览
+- 新增 `/上下文`：不调模型，打印 prompt 各段字数 + 前 2000 字预览，含 `【写作规则】` 顶部和 `【续写正文】` 底部标签
 - 新增 `/拒绝`：丢弃当前输出，不写 session，自动重新生成
 - `/重试 [指令]`：合并替换旧的 `/重新生成`，功能相同
 - 退出命令扩展：`/退出`、`q`、`退出`、`exit`、`quit` 均可退出
 - else 分支加防护：`/` 开头未知命令提示错误，不写 session
 
+### cowriter/session.py
+- `_maybe_compress()`：加 try-except 包住 `_chat()` 调用，捕获 Ollama ResponseError
+- 加 fallback：LLM 返回空或 < 20 字时，用 `[前情节选] {old_text[:200]}` 作为摘要，保证 `session.summary` 非空
+
 ### cowriter/prompts.py
-- `SYSTEM_PROMPT` 新增「严禁输出」块：禁止 AI 助手语、Markdown 标题、英文夹杂、视角切换等
-- 续写后缀改为：「第一个字就是正文，不要有任何前缀或解释」
+- `SYSTEM_PROMPT` 改为执行感写法，8 条正向规则，新增「禁止空输出」规则
+- `build_prompt()` block 顺序：设定 → 摘要 → 原文检索 → 上文 → 要求；全换中文方括号标签
+- `build_summary_prompt()`：加防幻觉规则（禁止编造、不要分析文风）
 
 ### cowriter/retriever.py（已重构）
 - 新增 `_tokenize()`：BM25 建索引和查询共用同一套分词，过滤单字空词
@@ -101,6 +106,7 @@
 |------|---------|
 | 模型偶发空输出 | 用 `/重试` 重新生成，无需重启 |
 | 模型可能输出 AI 助手语 | prompt 已加强；若仍出现用 `/拒绝` 丢弃 |
+| 摘要压缩：小模型无法生成合理摘要 | `_maybe_compress()` 已加 try-except + fallback：LLM 失败时用原文前 200 字作为摘要节选，保证 `session.summary` 非空 |
 | story_bible 文件名即实体名 | 命名须直接用人名/地名，如 `林清雪.md` |
 | CUDA 13.2 Unsloth 兼容性 | 阶段4开始前必须先跑 forward pass 验证，不要直接上数据 |
 | `data/story_bible/*.md` 不入 git | `.gitignore` 已保护，只有 `.gitkeep` 入库 |

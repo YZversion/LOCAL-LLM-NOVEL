@@ -150,7 +150,12 @@ def main():
             )
             sys_txt = msgs[0]["content"]
             usr_txt = msgs[1]["content"]
-            full = sys_txt + "\n\n" + usr_txt
+            full_len = len(sys_txt) + len(usr_txt)
+            display = (
+                "【写作规则】\n" + sys_txt
+                + "\n\n" + usr_txt
+                + "\n\n【续写正文】\n（← 模型输出区）"
+            )
             bible_chars = sum(len(r["text"][:400]) for r in retrieval.get("bible", []))
             grep_chars = sum(len(g) for g in retrieval.get("grep", [])[:3])
             print("\n[上下文统计]")
@@ -159,9 +164,9 @@ def main():
             print(f"  retrieved_bible               : {bible_chars} 字")
             print(f"  retrieved_grep                : {grep_chars} 字")
             print(f"  recent_context                : {len(ctx_win)} 字")
-            print(f"  final_prompt 总计             : {len(full)} 字")
+            print(f"  final_prompt 总计             : {full_len} 字")
             print(f"\n[Prompt 前 2000 字预览]\n{DIVIDER}")
-            print(full[:2000])
+            print(display[:2000])
 
         elif cmd in ("/退出", "q", "退出", "exit", "quit"):
             if input("退出前保存草稿？(y/N)：").strip().lower() == "y":
