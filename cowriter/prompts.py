@@ -1,25 +1,25 @@
 SYSTEM_PROMPT = """\
-你是一位协助作者续写长篇中文小说的写作助手。
+你是一位长篇中文小说续写助手。
 
-【核心规则】
-1. 严格模仿作者的文风、叙事节奏与行文习惯，不做任何风格上的「优化」
-2. 顺着上文的势头自然延伸，不主动推进或跳跃主线剧情
-3. 人物的言行、性格、口吻必须严格符合设定，不得随意拔高或软化
-4. 直接续写正文，禁止总结、解释、旁白性评论
-5. 不引入上文从未提及的全新命名人物
+你会收到相关设定、原文命中段落、剧情摘要、当前上文和续写要求。
+这些资料只用于保持事实、人物、地点、视角和文风一致，不是正文的一部分。
 
-【严禁输出以下内容——违反即为错误】
-- 禁止以"好的""当然""明白了""我来帮你""我将为你""以下是"等 AI 助手语气开头
-- 禁止输出 Markdown 标题（## / ### 等）或分割线（---）
-- 禁止夹杂英文单词、拼音或任何非正文注释
-- 禁止输出写作建议、风格分析、情节说明
-- 禁止切换叙事视角——严格跟随上文的视角人物
-- 禁止在正文外添加括号注释、方括号标注或任何元信息
-- 禁止在结尾附加"（完）""——END——"或章节编号
+你的任务是：从【当前上文】最后一句之后，直接续写小说正文。
 
-【输出格式要求】
-直接从上文最后一句话之后续写。输出的第一个字就是正文，无需任何前缀或说明。\
+必须遵守：
+1. 严格延续作者原有文风、叙事节奏、遣词习惯和人物口吻，不主动优化文风。
+2. 只延续当前场景、当前情绪和当前动作，不主动跳转剧情，不快速推进主线。
+3. 人物性格、关系、称谓和行为必须符合设定；若当前上文与设定有差异，以当前上文为准。
+4. 不引入上文、摘要或设定中从未出现的全新命名人物。
+5. 严格跟随当前上文的叙事视角，不切换视角。
+6. 只输出小说正文。第一个字必须是正文，不要有任何前缀、解释、标题、列表、分隔线、括号注释或结尾标记。
+7. 不要使用"好的""当然""明白了""以下是"等助手语气。
+8. 即使信息不足，也必须自然承接上文续写，禁止空输出。\
 """
+
+
+def _clip(text: str, limit: int) -> str:
+    return (text or "").strip()[:limit]
 
 
 def build_prompt(
@@ -31,23 +31,56 @@ def build_prompt(
 ) -> list[dict]:
     blocks: list[str] = []
 
+    # 1. 设定集
     if retrieval.get("bible"):
-        parts = [f"【{r['source']}】\n{r['text'][:400]}" for r in retrieval["bible"]]
-        blocks.append("## 相关设定\n" + "\n\n".join(parts))
-
-    if retrieval.get("grep"):
+        parts = []
+        for i, r in enumerate(retrieval["bible"][:5], 1):
+            source = r.get("source", "未知来源")
+            text = _clip(r.get("text", ""), 400)
+            parts.append(f"【相关设定{i}：{source}】\n{text}")
         blocks.append(
-            "## 原文检索（人物/地点命中段落）\n"
-            + "\n---\n".join(retrieval["grep"][:3])
+            "【相关设定】\n"
+            "以下内容只用于约束人物、地点、物品、关系和背景，不要复述，不要总结。\n\n"
+            + "\n\n".join(parts)
         )
 
+    # 2. 剧情摘要
     if summary:
-        blocks.append(f"## 剧情摘要\n{summary}")
+        blocks.append(
+            "【剧情摘要】\n"
+            "以下内容只用于理解前情，不要在正文中解释或概括。\n"
+            + _clip(summary, 500)
+        )
 
-    blocks.append(f"## 当前上文（最近约 {len(recent_text)} 字）\n{recent_text}")
+    # 3. 原文命中段落
+    if retrieval.get("grep"):
+        parts = []
+        for i, hit in enumerate(retrieval["grep"][:3], 1):
+            parts.append(f"【原文命中段落{i}】\n{_clip(hit, 700)}")
+        blocks.append(
+            "【原文命中段落】\n"
+            "以下段落用于参考作者原文的语气、节奏、称谓和描写方式，不是续写起点。\n\n"
+            + "\n\n".join(parts)
+        )
 
-    suffix = f"请直接续写约 {target_chars} 字正文，第一个字就是正文，不要有任何前缀、说明或解释。{instruction}".strip()
-    blocks.append(f"## 续写要求\n{suffix}")
+    # 4. 当前上文（唯一续写起点，紧靠要求）
+    blocks.append(
+        "【当前上文】\n"
+        "以下是唯一的续写起点，请从最后一句之后自然接下去。\n\n"
+        + recent_text.strip()
+    )
+
+    # 5. 续写要求
+    requirement = (
+        f"【续写要求】\n"
+        f"请直接续写约 {target_chars} 字小说正文。\n"
+        f"第一个字必须是正文，不要标题，不要解释，不要总结，不要空输出。\n"
+        f"不要为了凑字数强行转场，宁可略短，也要自然。"
+    )
+    extra = instruction.strip()
+    if extra:
+        requirement += f"\n额外要求：{extra}"
+    blocks.append(requirement)
 
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -60,10 +93,11 @@ def build_summary_prompt(text_to_compress: str) -> list[dict]:
         {
             "role": "system",
             "content": (
-                "你是一位小说编辑。请用简洁中文概括以下段落的剧情要点，"
-                "保留人物当前状态、所在地点、重要物品、未解决的冲突与伏笔，"
-                "约 150 字以内，不需要分析，只要事实。"
+                "你是一位小说编辑。请只根据给定原文概括剧情事实，禁止编造。"
+                "保留人物当前状态、所在地点、重要物品、人物关系、未解决冲突、伏笔和正在发生的动作。"
+                "不要分析文风，不要评价人物，不要写写作建议。"
+                "输出一段简洁中文，150字以内。"
             ),
         },
-        {"role": "user", "content": text_to_compress},
+        {"role": "user", "content": text_to_compress.strip()},
     ]

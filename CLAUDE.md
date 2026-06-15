@@ -19,11 +19,13 @@
 | 项目 | 值 |
 |------|----|
 | 工作目录 | `c:\Users\14390\Desktop\Code\LOCAL-LLM-NOVEL` |
+| GitHub | `https://github.com/YZversion/LOCAL-LLM-NOVEL` |
 | 推理模型 | `hf.co/DavidAU/Qwen2.5-MOE-2X1.5B-DeepSeek-Uncensored-Censored-4B-gguf:Q4_K_M`（Ollama） |
 | 微调框架 | Unsloth QLoRA 4-bit（阶段4，未开始） |
 | 显存预算 | 8GB（RTX 4070 Laptop） |
 | CUDA | 13.2（Unsloth 兼容性待验证） |
-| 数据保护 | `data/`、`models/`、`outputs/` 全部 gitignore |
+| 数据保护 | `data/`、`models/`、`outputs/` 全部 gitignore，素材文件绝不入库 |
+| Python | 3.11.9 |
 
 ---
 
@@ -31,24 +33,24 @@
 
 ```
 [✓] 阶段0  repo 骨架 + 环境配置文件
-[~] 阶段2  零训练合写回路（代码已写，尚未端到端测试）
+[~] 阶段2  零训练合写回路（5/7 通过，剩 /保存 + 摘要压缩待验证）
 [ ] 阶段1  数据清洗（prepare_data.py，用户自有脚本）
 [ ] 阶段3  文风评测（eval_style.py）
 [ ] 阶段4  QLoRA 微调
 [ ] 阶段5  向量 RAG（按需）
 ```
 
-**当前焦点：阶段2 端到端验证**
+**当前焦点：阶段2 收尾（第6、7项）**
 
 ---
 
 ## 阶段2 测试清单（当前阶段必须全部通过）
 
-- [ ] `pip install -r requirements.txt` 无报错
-- [ ] `ollama pull hf.co/DavidAU/Qwen2.5-MOE-2X1.5B-DeepSeek-Uncensored-Censored-4B-gguf:Q4_K_M` 成功，`ollama list` 可见
-- [ ] `python -m cowriter.app` 可启动，不崩溃
-- [ ] 粘贴一段上文 → 模型生成一段续写 → 接受 → 再生成一段，循环正常
-- [ ] `/检索 <人物名>` 在有设定集文件时能返回结果
+- [✓] `pip install -r requirements.txt` 无报错
+- [✓] `ollama pull hf.co/DavidAU/Qwen2.5-MOE-2X1.5B-DeepSeek-Uncensored-Censored-4B-gguf:Q4_K_M` 成功，`ollama list` 可见
+- [✓] `python -m cowriter.app` 可启动，不崩溃
+- [~] 粘贴上文 → 生成 → 接受 → 再生成循环（模型偶发空输出，用 `/重试` 可绕过）
+- [✓] `/检索 <人物名>` 在有设定集文件时能返回结果（已用《风丝引》素材验证）
 - [ ] `/保存` 在 `outputs/` 生成 txt 文件
 - [ ] 摘要压缩：输入超过 4000 字后 `session.summary` 非空
 
@@ -70,11 +72,47 @@
 
 ---
 
+## 已完成的代码改动记录
+
+### cowriter/app.py
+- 新增 `/上下文`：不调模型，打印 prompt 各段字数 + 前 2000 字预览
+- 新增 `/拒绝`：丢弃当前输出，不写 session，自动重新生成
+- `/重试 [指令]`：合并替换旧的 `/重新生成`，功能相同
+- 退出命令扩展：`/退出`、`q`、`退出`、`exit`、`quit` 均可退出
+- else 分支加防护：`/` 开头未知命令提示错误，不写 session
+
+### cowriter/prompts.py
+- `SYSTEM_PROMPT` 新增「严禁输出」块：禁止 AI 助手语、Markdown 标题、英文夹杂、视角切换等
+- 续写后缀改为：「第一个字就是正文，不要有任何前缀或解释」
+
+### cowriter/retriever.py（已重构）
+- 新增 `_tokenize()`：BM25 建索引和查询共用同一套分词，过滤单字空词
+- `_load_bible()`：把 `.md` 文件名注册进 jieba 词典（freq=10000），维护 `_entity_names` 集合
+- `extract_entities()`：三层优先级 → bible 已知实体 → posseg 命名实体（nr/ns/nt/nz）→ 停用词过滤
+- `search_bible()`：返回 `{source, text, score}`，text 截断至 1200 字
+- `grep_raw()`：加 `-F` 防正则，处理 rg returncode 0/1/2，fallback 改用 `rglob`
+- `retrieve()`：bible query = 实体拼接 + 末 150 字；grep 结果去重
+
+---
+
+## 已知坑 / 注意事项
+
+| 问题 | 处理方式 |
+|------|---------|
+| 模型偶发空输出 | 用 `/重试` 重新生成，无需重启 |
+| 模型可能输出 AI 助手语 | prompt 已加强；若仍出现用 `/拒绝` 丢弃 |
+| story_bible 文件名即实体名 | 命名须直接用人名/地名，如 `林清雪.md` |
+| CUDA 13.2 Unsloth 兼容性 | 阶段4开始前必须先跑 forward pass 验证，不要直接上数据 |
+| `data/story_bible/*.md` 不入 git | `.gitignore` 已保护，只有 `.gitkeep` 入库 |
+
+---
+
 ## 文件修改规范
 
 | 文件 | 说明 |
 |------|------|
 | `config.yaml` | 唯一配置源，所有脚本从这读参数 |
+| `cowriter/app.py` | 主入口，改动后必须手测所有命令（含 `/上下文`、`/拒绝`、`q`） |
 | `cowriter/retriever.py` | 检索逻辑，改动后必须手动跑 `/检索` 验证 |
 | `cowriter/prompts.py` | 提示词，改动后必须跑一次完整生成对比前后输出 |
 | `cowriter/session.py` | 主循环，改动后必须跑完整的接受→压缩→再生成流程 |
