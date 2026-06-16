@@ -33,10 +33,10 @@ assert "续写约" not in full_text, "字数要求泄漏！"
 assert "请直接续写" not in full_text, "任务句泄漏！"
 assert "禁止空输出" not in full_text, "负向指令泄漏！"
 assert "禁止" not in full_text, "负向指令泄漏！"
-assert "/no_think" in msgs[0]["content"], "/no_think 未写入 SYSTEM"
+assert "/no_think" not in msgs[0]["content"], "/no_think 不应在 SYSTEM 中（已移除，改用 think=False）"
 print("\n=== prompt 结构 ===")
 print(f"  OK 字数要求 / 负向指令 均未出现")
-print(f"  OK /no_think 在 SYSTEM 中")
+print(f"  OK /no_think 不在 SYSTEM 中（已移除）")
 print(f"  messages 数量: {len(msgs)}，最后 role: {msgs[-1]['role']}")
 print(f"  prefill: {repr(msgs[-1]['content'])}")
 
@@ -49,6 +49,19 @@ cases_think = [
     ("<think>未闭合推理\n多行", ""),
     ("正常正文", "正常正文"),
     ("<think>block1</think>中间<think>block2</think>尾", "中间尾"),
+    # /no_think 截断残片（行首应删）
+    ("/no\n正文开始", "正文开始"),
+    ("/no_\n正文开始", "正文开始"),
+    ("/no_thin\n正文开始", "正文开始"),
+    ("/no_think\n正文开始", "正文开始"),
+    ("第一行正文\n/no\n第三行正文", "第一行正文\n第三行正文"),
+    ("正文中嵌入/no字样不误删", "正文中嵌入/no字样不误删"),
+    # 行首助手语（独占一行才删）
+    ("好的。\n林清雪缓缓抬眸。", "林清雪缓缓抬眸。"),
+    ("好的，\n林清雪缓缓抬眸。", "林清雪缓缓抬眸。"),
+    ("好的：\n正文", "正文"),
+    ("好的，我同意。", "好的，我同意。"),
+    ('林清雪说"好的，我明白了。"\n她转身而去。', '林清雪说"好的，我明白了。"\n她转身而去。'),
 ]
 print("\n=== _strip_think ===")
 for inp, expected in cases_think:

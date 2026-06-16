@@ -28,7 +28,14 @@ generation:
   temperature: 0.8
   top_p: 0.8
   top_k: 20
-  repeat_penalty: 1.05
+  repeat_penalty: 1.15       # 1.05→1.15：轻度提高对重复 token 的惩罚
+  repeat_last_n: 256         # 默认64→256：惩罚窗口覆盖完整循环周期
+  presence_penalty: 0.3      # 出现即惩罚：降低已出现词/短语再次被采样概率
+  frequency_penalty: 0.3     # 出现越多惩罚越重：进一步抑制高频短语
+  dry_multiplier: 0.8        # DRY 核心：复现已有序列时的惩罚系数
+  dry_base: 1.75             # DRY 指数底：重复序列越长惩罚指数增长
+  dry_allowed_length: 2      # DRY 免疫长度：≤2字叠词不受影响
+  dry_penalty_last_n: 512    # DRY 检测窗口：覆盖完整生成上文
 
 # 阶段4:QLoRA 超参(届时解注释)
 # training:
