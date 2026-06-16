@@ -20,7 +20,8 @@
 |------|----|
 | 工作目录 | `c:\Users\14390\Desktop\Code\LOCAL-LLM-NOVEL` |
 | GitHub | `https://github.com/YZversion/LOCAL-LLM-NOVEL` |
-| 推理模型 | `hf.co/DavidAU/Qwen2.5-MOE-2X1.5B-DeepSeek-Uncensored-Censored-4B-gguf:Q4_K_M`（Ollama） |
+| 推理模型（当前） | `huihui_ai/qwen3-abliterated:8b-v2`（Qwen3-8B 去审查 instruct，标准 ChatML，已 pull） |
+| 推理模型（已弃用） | `hf.co/DavidAU/Qwen2.5-MOE-2X1.5B-DeepSeek-...-4B-gguf:Q4_K_M`（R1 蒸馏 MoE，见阶段2.6 决策记录） |
 | 微调框架 | Unsloth QLoRA 4-bit（阶段4，未开始） |
 | 显存预算 | 8GB（RTX 4070 Laptop） |
 | CUDA | 13.2（Unsloth 兼容性待验证） |
@@ -32,27 +33,77 @@
 ## 阶段路线图与当前状态
 
 ```
-[✓] 阶段0  repo 骨架 + 环境配置文件
-[✓] 阶段2  零训练合写回路（7/7 通过）
-[ ] 阶段1  数据清洗（prepare_data.py，用户自有脚本）
-[ ] 阶段3  文风评测（eval_style.py）
-[ ] 阶段4  QLoRA 微调
-[ ] 阶段5  向量 RAG（按需）
+[✓] 阶段0    repo 骨架 + 环境配置文件
+[✓] 阶段2    零训练合写回路（7/7 通过，基于已弃用模型）
+[ ] 阶段2.6  模型迁移（弃用 R1 蒸馏 MoE → Qwen3-8B）+ 补全式续写改造  ← 当前焦点
+[ ] 阶段1    数据清洗（prepare_data.py，用户自有脚本）
+[ ] 阶段3    文风评测（eval_style.py）
+[ ] 阶段4    QLoRA 微调
+[ ] 阶段5    向量 RAG（按需）
 ```
 
-**当前焦点：阶段2 已完成，下一步待决策（Web UI vs 阶段2.5 原文检索增强）**
+**当前焦点：阶段2.6 — 切换到 Qwen3-8B + 把"chat 任务问答"改造成"小说文本补全"。**
+阶段2 的 7/7 通过是针对旧模型的，换模型后相关项需用阶段2.6 清单重新验证。
 
 ---
 
-## 阶段2 测试清单（当前阶段必须全部通过）
+## 阶段2.6 模型迁移决策记录（当前阶段）
 
-- [✓] `pip install -r requirements.txt` 无报错
-- [✓] `ollama pull hf.co/DavidAU/Qwen2.5-MOE-2X1.5B-DeepSeek-Uncensored-Censored-4B-gguf:Q4_K_M` 成功，`ollama list` 可见
-- [✓] `python -m cowriter.app` 可启动，不崩溃
-- [~] 粘贴上文 → 生成 → 接受 → 再生成循环（模型偶发空输出，用 `/重试` 可绕过）
-- [✓] `/检索 <人物名>` 在有设定集文件时能返回结果（已用《风丝引》素材验证）
-- [✓] `/保存` 在 `outputs/` 生成 txt 文件，路径打印清楚
-- [✓] 摘要压缩：输入超过 4000 字后 `session.summary` 非空，`【剧情摘要】`块进入下一轮 prompt
+### 为什么弃用旧模型（R1 蒸馏 MoE 2X1.5B）
+
+| 症状 | 根因（非调参可救） |
+|------|-------------------|
+| "好的，接下来我将按以下步骤编写" + 1./2./3. 列表 | R1 蒸馏的目标行为本身就是"先列计划再执行"，模型在正确地做被训练的事，只是那件事不是写小说 |
+| 文风/人物/连贯性塌 | MoE 仅激活 ~1.5B 参数，长篇叙事吃稠密参数量，1.5B 激活不够 |
+| 英文乱码 token（`themngthtson` 等） | Q4 量化 + 小模型 + 混合蒸馏导致词表/数值不稳，作者已标 Known Issue，无解 |
+| 偶发空输出 | 同属上述不稳定性 |
+
+结论：**任务错配（推理型模型 ≠ 写作型模型），换模型，不在旧模型上继续调参。**
+
+### 新方向
+
+- **模型**：`huihui_ai/qwen3-abliterated:8b-v2`。标准 ChatML（system 有专用边界，约束力强）；abliterated 去审查，利于偏暗情节。
+- **必须关思考**：Qwen3 是混合推理模型，默认输出 `<think>` 链。不关会重现旧模型的列表/助手语问题。用 `think=False`（主），`/no_think`（双保险）。
+- **补全式而非任务式**：去掉"请续写约600字"这类任务句 + 负向指令（小模型对"禁止…"几乎无效）。改用 prefill 让模型顺着上文写正文，而不是"接受任务再回答"。
+- **采样调回写作区间**：旧模型为压垃圾把 temp 压到 0.25，换模型后会让小说又干又重复，需调回。
+
+### 阶段2.6 测试清单（必须全部通过）
+
+- [ ] `config.yaml` 模型名已切换为 `huihui_ai/qwen3-abliterated:8b-v2`
+- [ ] `python -m cowriter.app` 用新模型可启动，不崩溃
+- [ ] 单次生成输出为**纯中文小说正文**：无"好的/接下来我将"、无 1./2./3. 列表、无 `<think>` 残留、无英文乱码
+- [ ] prefill 生效：续写与上文衔接自然，不另起"任务回答"
+- [ ] 连续 5 次生成无空输出（验证旧模型的偶发空输出问题已消失）
+- [ ] `/检索`、`/保存`、摘要压缩等阶段2 既有命令在新模型下仍正常
+
+---
+
+## 待执行改动（阶段2.6，尚未实施）
+
+> 实施前先读 `config.yaml`、`session.py`、`prompts.py`，贴出当前逻辑确认后再动。只动模型调用与 prompt 拼装，**不碰 Gradio UI 和 BM25/grep 检索**。
+
+### config.yaml
+- 模型名 → `huihui_ai/qwen3-abliterated:8b-v2`
+- 采样参数（Qwen3 非思考模式基础上偏创作）：
+  - `temperature: 0.8`
+  - `top_p: 0.8`
+  - `top_k: 20`
+  - `repeat_penalty: 1.05`
+  - 保留 `num_predict` / `output_tokens` 现有逻辑
+
+### cowriter/session.py
+- 所有 `ollama.chat()` 加 `think=False`
+- 解析 `resp["message"]` 时分别取 `.content` 与 `.thinking`，**绝不把 thinking 拼进输出**
+- 加正则后处理：剥掉残留 `<think>...</think>`（含只有开标签未闭合的情况）
+
+### cowriter/prompts.py
+- `SYSTEM_PROMPT` 精简为纯文风/视角/人物约束，**去掉所有负向指令**（"禁止空输出""禁止助手语气"改为正向风格描述）；末尾加 `/no_think`
+- 改 prefill：messages 末尾追加 `{"role":"assistant","content": <上文结尾自然截取的几个字>}`，让模型只能顺着写正文
+- block 顺序：背景（设定/摘要/grep命中）在前，「当前上文」放最后紧贴 prefill；去掉"请直接续写约600字"任务句
+
+### 兼容性提示
+- 真正生效的是 `think=False`；`/no_think` 仅冗余防护。若某版 Ollama 对 `think=` 报参数错，去掉 `think=False`、保留 `/no_think`。
+- fallback 预案：若 Qwen3 关思考后仍有 ChatML 残留或文风不稳，退到 `qwen2.5:7b-instruct`（纯 instruct，无推理污染）。
 
 ---
 
@@ -74,6 +125,8 @@
 
 ## 已完成的代码改动记录
 
+> 以下为旧模型时期的改动历史。阶段2.6 的改动落地后另起记录，不要覆盖本节。
+
 ### cowriter/app.py
 - 新增 `/上下文`：不调模型，打印 prompt 各段字数 + 前 2000 字预览，含 `【写作规则】` 顶部和 `【续写正文】` 底部标签
 - 新增 `/拒绝`：丢弃当前输出，不写 session，自动重新生成
@@ -87,6 +140,7 @@
 
 ### cowriter/prompts.py
 - `SYSTEM_PROMPT` 改为执行感写法，8 条正向规则，新增「禁止空输出」规则
+  - ⚠️ 阶段2.6 将推翻此项：负向指令对小模型无效，改补全式 + prefill
 - `build_prompt()` block 顺序：设定 → 摘要 → 原文检索 → 上文 → 要求；全换中文方括号标签
 - `build_summary_prompt()`：加防幻觉规则（禁止编造、不要分析文风）
 
@@ -104,9 +158,11 @@
 
 | 问题 | 处理方式 |
 |------|---------|
-| 模型偶发空输出 | 用 `/重试` 重新生成，无需重启 |
-| 模型可能输出 AI 助手语 | prompt 已加强；若仍出现用 `/拒绝` 丢弃 |
-| 摘要压缩：小模型无法生成合理摘要 | `_maybe_compress()` 已加 try-except + fallback：LLM 失败时用原文前 200 字作为摘要节选，保证 `session.summary` 非空 |
+| 模型偶发空输出 | 旧模型问题，**预期由阶段2.6 换模型解决**；验证前仍可用 `/重试` |
+| 模型输出 AI 助手语 / 1.2.3. 列表 | R1 蒸馏的目标行为，**预期由换模型 + 补全式 prefill 解决**，非 prompt 可救 |
+| 英文乱码 token | 旧模型 Q4 量化 Known Issue，**由换模型解决** |
+| Qwen3 思考链泄漏（新） | Qwen3 默认输出 `<think>`，必须 `think=False`；并在输出端正则剥离残留 `<think>` 块 |
+| 摘要压缩：小模型无法生成合理摘要 | `_maybe_compress()` 已加 try-except + fallback：LLM 失败时用原文前 200 字作摘要节选，保证 `session.summary` 非空 |
 | story_bible 文件名即实体名 | 命名须直接用人名/地名，如 `林清雪.md` |
 | CUDA 13.2 Unsloth 兼容性 | 阶段4开始前必须先跑 forward pass 验证，不要直接上数据 |
 | `data/story_bible/*.md` 不入 git | `.gitignore` 已保护，只有 `.gitkeep` 入库 |
@@ -146,5 +202,5 @@
 - ...
 
 **当前阶段通关状态**
-阶段2测试清单：X/7 通过
+阶段2.6 测试清单：X/6 通过
 ```

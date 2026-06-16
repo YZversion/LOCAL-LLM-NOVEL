@@ -1,7 +1,17 @@
+import json
+import re
 from datetime import datetime
 from pathlib import Path
 
 import ollama
+
+
+def _strip_think(text: str) -> str:
+    """剥掉 think 块：完整块、未闭合开标签、Ollama 遗留的孤立 </think>。"""
+    text = re.sub(r'<think>[\s\S]*?</think>', '', text)  # 完整块
+    text = re.sub(r'<think>[\s\S]*', '', text)           # 未闭合开标签
+    text = re.sub(r'</think>\s*', '', text)              # 孤立闭标签
+    return text.strip()
 
 from cowriter.prompts import build_prompt, build_summary_prompt
 from cowriter.retriever import Retriever
@@ -16,19 +26,51 @@ class Session:
         self.accepted_text: str = ""  # 本次会话已确认的全部正文
         self.output_dir = Path(config["paths"]["outputs"])
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self._debug_dir = self.output_dir / "debug"
+        self._debug_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── Debug dump ────────────────────────────────────────────────────────────
+
+    def _dump_debug(self, messages: list[dict], options: dict, thinking: str, content: str):
+        ts = datetime.now().isoformat(timespec="seconds")
+        req = {
+            "timestamp": ts,
+            "endpoint": "/api/chat (ollama.chat SDK)",
+            "model": self.model,
+            "messages": messages,
+            "options": options,
+        }
+        (self._debug_dir / "last_request.json").write_text(
+            json.dumps(req, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        prompt_text = "\n\n".join(
+            f"[{m['role'].upper()}]\n{m['content']}" for m in messages
+        )
+        (self._debug_dir / "last_prompt.txt").write_text(prompt_text, encoding="utf-8")
+        sep = "\n" + "=" * 60 + "\n"
+        (self._debug_dir / "last_response.txt").write_text(
+            f"[THINKING]\n{thinking}" + sep + f"[CONTENT]\n{content}",
+            encoding="utf-8",
+        )
 
     # ── Ollama 调用 ──────────────────────────────────────────────────────────
 
     def _chat(self, messages: list[dict], max_tokens: int | None = None) -> str:
         g = self.cfg["generation"]
-        options = {
+        options: dict = {
             "temperature": g["temperature"],
             "top_p": g["top_p"],
             "repeat_penalty": g["repeat_penalty"],
             "num_predict": max_tokens or self.cfg["session"]["output_tokens"],
         }
-        resp = ollama.chat(model=self.model, messages=messages, options=options)
-        return resp["message"]["content"].strip()
+        if "top_k" in g:
+            options["top_k"] = g["top_k"]
+        resp = ollama.chat(model=self.model, messages=messages, options=options, think=False)
+        msg = resp["message"]
+        thinking = msg.get("thinking") or ""
+        content  = _strip_think(msg.get("content") or "")
+        self._dump_debug(messages, options, thinking, content)
+        return content.strip()
 
     # ── 滚动摘要 ─────────────────────────────────────────────────────────────
 

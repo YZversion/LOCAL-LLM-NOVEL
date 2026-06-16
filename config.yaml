@@ -1,7 +1,7 @@
 model:
   # 阶段2:Ollama 推理
   provider: ollama
-  ollama_model: "hf.co/DavidAU/Qwen2.5-MOE-2X1.5B-DeepSeek-Uncensored-Censored-4B-gguf:Q4_K_M"
+  ollama_model: "huihui_ai/qwen3-abliterated:8b-v2"
   ollama_base_url: "http://localhost:11434"
 
   # 阶段4:微调基座(届时解注释)
@@ -25,9 +25,10 @@ session:
   output_tokens: 600       # 单次续写最大 token 数
 
 generation:
-  temperature: 0.85
-  top_p: 0.90
-  repeat_penalty: 1.10
+  temperature: 0.8
+  top_p: 0.8
+  top_k: 20
+  repeat_penalty: 1.05
 
 # 阶段4:QLoRA 超参(届时解注释)
 # training:

@@ -1,25 +1,56 @@
-SYSTEM_PROMPT = """\
-你是一位长篇中文小说续写助手。
+import re as _re
 
-你会收到相关设定、原文命中段落、剧情摘要、当前上文和续写要求。
-这些资料只用于保持事实、人物、地点、视角和文风一致，不是正文的一部分。
+_SENT_END = _re.compile(r'[。！？]')
+_PAUSE    = _re.compile(r'[，,、；]')
 
-你的任务是：从【当前上文】最后一句之后，直接续写小说正文。
 
-必须遵守：
-1. 严格延续作者原有文风、叙事节奏、遣词习惯和人物口吻，不主动优化文风。
-2. 只延续当前场景、当前情绪和当前动作，不主动跳转剧情，不快速推进主线。
-3. 人物性格、关系、称谓和行为必须符合设定；若当前上文与设定有差异，以当前上文为准。
-4. 不引入上文、摘要或设定中从未出现的全新命名人物。
-5. 严格跟随当前上文的叙事视角，不切换视角。
-6. 只输出小说正文。第一个字必须是正文，不要有任何前缀、解释、标题、列表、分隔线、括号注释或结尾标记。
-7. 不要使用"好的""当然""明白了""以下是"等助手语气。
-8. 即使信息不足，也必须自然承接上文续写，禁止空输出。\
-"""
+def _extract_prefill(recent_text: str, max_chars: int = 15) -> str:
+    """
+    prefill 截取规则（固定，不随 prompt 调整）：
+      1. 找最后一句：从 recent_text 末尾往前找最后一个句末标点（。！？），
+         其后到文本末尾为"最后一句"。若文本以句末标点结尾（last_sent 为空），
+         则退到倒数第二个句末标点之间的完整句作为"最后一句"。
+      2. 截取开头：在最后一句内找第一个句内停顿（逗号/顿号/分号），
+         取其之前的部分（不含停顿符），上限 max_chars 字。
+      3. 短句整句：若最后一句本身 ≤ max_chars 且无内部停顿，整句拿来（去末尾标点）。
+      4. 无停顿长句：无内部停顿且 > max_chars，截取前 max_chars 字。
+    目的：给模型"句子已起头、只能顺着写"的状态，不在句号后重启任务腔。
+    """
+    text = recent_text.rstrip()
+    if not text:
+        return ""
+    ends = [m.end() for m in _SENT_END.finditer(text)]
+    last_sent = text[ends[-1]:].strip() if ends else text.strip()
+    if not last_sent:
+        start = ends[-2] if len(ends) >= 2 else 0
+        last_sent = text[start:ends[-1] - 1].strip()
+    if not last_sent:
+        return ""
+    # 有停顿就截到停顿前（无论句子长短）
+    pm = _PAUSE.search(last_sent)
+    if pm:
+        return last_sent[:pm.start()]
+    # 无停顿：短句整句（去末尾标点），长句截 max_chars
+    if len(last_sent) <= max_chars:
+        return last_sent.rstrip('。！？，,、；')
+    return last_sent[:max_chars]
 
 
 def _clip(text: str, limit: int) -> str:
     return (text or "").strip()[:limit]
+
+
+SYSTEM_PROMPT = """\
+你是一位长篇中文小说续写助手，你的输出就是小说正文本身。
+
+延续文风：沿用作者原有的叙事节奏、遣词习惯、句式长短和人物口吻，不主动优化或改良文笔。
+延续场景：只延续当前场景的情绪、动作和节奏，不主动跳转剧情，不快速推进主线。
+延续人物：性格、关系、称谓和行为与设定一致；设定与上文有差异时，以上文为准；不引入从未出现的新命名人物。
+延续视角：跟随当前上文的叙事视角，不切换。
+输出格式：直接输出正文，不带任何标题、说明、括号注释、分隔线或前导语。
+
+/no_think\
+"""
 
 
 def build_prompt(
@@ -27,7 +58,7 @@ def build_prompt(
     summary: str,
     retrieval: dict,
     instruction: str = "",
-    target_chars: int = 600,
+    target_chars: int = 600,  # 保留签名兼容性；字数由 num_predict 控制，不写入 prompt
 ) -> list[dict]:
     blocks: list[str] = []
 
@@ -63,29 +94,23 @@ def build_prompt(
             + "\n\n".join(parts)
         )
 
-    # 4. 当前上文（唯一续写起点，紧靠要求）
-    blocks.append(
-        "【当前上文】\n"
-        "以下是唯一的续写起点，请从最后一句之后自然接下去。\n\n"
-        + recent_text.strip()
-    )
+    # 4. 续写方向（仅 /重试 等带附加指令时有值）
+    if instruction.strip():
+        blocks.append(f"续写方向：{instruction.strip()}")
 
-    # 5. 续写要求
-    requirement = (
-        f"【续写要求】\n"
-        f"请直接续写约 {target_chars} 字小说正文。\n"
-        f"第一个字必须是正文，不要标题，不要解释，不要总结，不要空输出。\n"
-        f"不要为了凑字数强行转场，宁可略短，也要自然。"
-    )
-    extra = instruction.strip()
-    if extra:
-        requirement += f"\n额外要求：{extra}"
-    blocks.append(requirement)
+    # 5. 当前上文（置最后，紧贴下方 prefill）
+    blocks.append("【当前上文】\n" + recent_text.strip())
 
-    return [
+    # prefill：截取最后一句开头，让模型处于"句子已起头"状态
+    prefill = _extract_prefill(recent_text)
+
+    messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": "\n\n".join(blocks)},
+        {"role": "user",   "content": "\n\n".join(blocks)},
     ]
+    if prefill:
+        messages.append({"role": "assistant", "content": prefill})
+    return messages
 
 
 def build_summary_prompt(text_to_compress: str) -> list[dict]:
