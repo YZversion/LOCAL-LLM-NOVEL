@@ -24,7 +24,8 @@ LOCAL-LLM-NOVEL/
 │  └─ prompts.py               # 补全式续写 prompt 与摘要 prompt
 ├─ scripts/
 │  ├─ build_story_bible.py     # 从 raw txt 构建 story_bible
-│  └─ split_characters.py      # 将人物汇总拆成单人物 Markdown
+│  ├─ split_characters.py      # 将人物汇总拆成单人物 Markdown
+│  └─ eval_draft.py            # 阶段3：对已有草稿运行确定性评测的 wrapper
 ├─ data/
 │  ├─ raw/                     # 原始小说 txt
 │  ├─ processed/               # 后续预处理产物
@@ -37,6 +38,8 @@ LOCAL-LLM-NOVEL/
 │  ├─ eval_style.py            # 阶段3：确定性文风评测 CLI
 │  ├─ train_qlora.py           # 阶段4占位：QLoRA 训练
 │  └─ export_gguf.py           # 阶段4占位：GGUF 导出
+├─ tests/
+│  └─ fixtures/eval_style/     # 阶段3固定假文本回归样本，不含真实小说原文
 └─ _test_*.py                  # 阶段性回归/实机验证脚本，含 _test_eval_style.py
 ```
 
@@ -48,7 +51,7 @@ LOCAL-LLM-NOVEL/
 data/
 ├─ raw/
 │  ├─ .gitkeep
-│  └─ 风丝引_原文.txt
+│  └─ <novel_source>.txt
 ├─ processed/
 │  └─ .gitkeep
 ├─ story_bible/
@@ -62,7 +65,7 @@ data/
 │  ├─ style.md
 │  ├─ glossary.md
 │  └─ _merged_data.json
-└─ 分析结果_31-58章.json
+└─ <analysis_result>.json
 ```
 
 目录职责：
@@ -98,7 +101,7 @@ generation:
   temperature: 0.8
   top_p: 0.8
   top_k: 20
-  repeat_penalty: 1.15
+  repeat_penalty: ...  # 以 config.yaml 为准
 ```
 
 这些路径被以下代码使用：
@@ -107,7 +110,7 @@ generation:
 - `cowriter.session.Session`: 使用 `paths.outputs` 保存草稿。
 - `scripts/build_story_bible.py`: 读取 `paths.raw_data` 下的 txt，写入 `paths.story_bible`。
 
-生成参数由 `cowriter.session.Session._chat()` 读取，并传给 `ollama.chat(..., think=False)`。DRY、presence/frequency penalty 等重复抑制参数如果存在于 `generation` 下，也会透传给 Ollama。
+生成参数由 `cowriter.session.Session._chat()` 读取，并传给 `ollama.chat(..., think=False)`。DRY、presence/frequency penalty、repeat penalty 等重复抑制参数以 `config.yaml` 为准；本文档不固定具体数值。
 
 ## Runtime Flow
 
@@ -153,27 +156,30 @@ _strip_think() → _dedup_output()
 - `_dedup_output()` 在输出端截断短句循环和大段单次复读。
 - 续写结果只有在用户接受或手动替换后才进入 `accepted_text`，随后可能触发滚动摘要压缩。
 
-## Stage 3 Evaluation Boundary
+## Stage 3 Evaluation Boundary（已完成）
 
-阶段3目标是实现确定性文风评测工具，不接入 LLM 评审。当前实现文件是 `pipeline/eval_style.py`，3.1-3.3 已完成：CLI 骨架、文本切分增强、重复检测增强。
+阶段3已于 2026-06-17 验收完成，目标是实现确定性文风评测工具，不接入 LLM 评审、不训练模型、不修改生成链路。核心实现是 `pipeline/eval_style.py`；便捷入口是 `scripts/eval_draft.py`；固定回归样本位于 `tests/fixtures/eval_style/`，全部为人工构造假文本，不含真实小说原文或真实输出草稿。
 
-阶段3工具应保持与生成链路解耦：
+阶段3工具保持与生成链路解耦：
 
 - 输入：reference 文本与 candidate 文本，默认 UTF-8。
-- 输出：人类可读报告和 JSON 报告。
-- 指标：文本切分、基础风格统计、重复风险、污染检测、reference/candidate 差异评分。
-- 边界：不修改 `cowriter.app`、`cowriter.web`、`cowriter.session`、`cowriter.retriever`，直到阶段3.8明确要求可选接入。
+- 输出：Markdown 报告、JSON 报告、终端短摘要。
+- 核心指标：基础统计、文本切分、重复风险、污染风险、`diff`、`style_score`。
+- 边界：不修改 `cowriter.session`、`cowriter.retriever`、`cowriter.prompts`、`cowriter.web`；`scripts/eval_draft.py` 只复用评测工具读取已有文件，不调用 Ollama，不改变 accepted_text，不保存草稿。
 
 当前 CLI：
 
 ```powershell
 python pipeline/eval_style.py --reference path/to/reference.txt --candidate path/to/candidate.txt
 python pipeline/eval_style.py --reference ref.txt --candidate cand.txt --out-json outputs/eval_style_report.json --out-md outputs/eval_style_report.md
+python scripts/eval_draft.py --reference data/raw/<novel_source>.txt --candidate outputs/draft_xxx.txt
+python scripts/eval_draft.py --config config.yaml --candidate outputs/draft_xxx.txt
 ```
 
 当前 JSON 顶层字段保持稳定：
 
 ```text
+meta
 inputs
 reference_stats
 candidate_stats
@@ -182,6 +188,7 @@ repetition
 contamination
 diff
 summary
+style_score
 ```
 
 已实现能力：
@@ -189,14 +196,16 @@ summary
 - `reference_stats` / `candidate_stats`: 字符数、非空白字符数、行数、段落数、句子数、平均/中位/最长句长、对话行数与比例。
 - `segmentation`: reference/candidate 的段落数、句子数、对话行数、平均每段句子数。
 - `repetition`: 重复行、重复段落、连续重复句、近似相邻句、短句循环、char 2/3/4-gram 与 `low/medium/high` 风险等级。
-- `contamination`: 基础版 candidate/reference 句子重合、重合比例、最长连续重合字符片段和风险等级。
-- `diff`: 字符数差异比例、平均句长差异、对话比例差异、重复风险、污染风险。
+- `contamination`: 精确/归一化/近似句子重合、char shingle、最长连续重合片段、段落级重合和风险等级。
+- `diff`: 字符数、句数、段落数、句长、对话比例、每段句数等 reference/candidate 差异指标。
+- `style_score`: 0-100 的形式风格接近度评分，level 为 `close/moderate/far/invalid`，不代表文学质量。
 
 回归测试入口：
 
 ```powershell
 python _test_eval_style.py
 python -m py_compile pipeline/eval_style.py
+python -m py_compile scripts/eval_draft.py
 ```
 
 ## Story Bible Build
@@ -235,8 +244,8 @@ data/story_bible/
 ├─ .build_cache/              # 断点续跑缓存，不参与检索
 └─ generated/
    └─ characters/             # split_characters.py 生成的单人物文件
-      ├─ 林清雪.md
-      ├─ 凤倾汐.md
+      ├─ <character_a>.md
+      ├─ <character_b>.md
       └─ （共21个，每人一文件）
 ```
 

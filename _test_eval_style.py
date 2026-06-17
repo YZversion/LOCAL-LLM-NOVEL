@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Regression tests for pipeline/eval_style.py using stable fixtures."""
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 import io
 import json
 
 from pipeline import eval_style
+from scripts import eval_draft
 
 
 ROOT = Path(__file__).resolve().parent
@@ -24,6 +25,12 @@ REPORT_MD = OUT / "eval_style_fixture_report.md"
 NESTED_REPORT_JSON = OUT / "reports" / "eval_style_fixture_nested.json"
 NESTED_REPORT_MD = OUT / "reports" / "eval_style_fixture_nested.md"
 EMPTY_REPORT_MD = OUT / "eval_style_fixture_empty.md"
+DRAFT_REPORT_JSON = OUT / "reports" / "eval_draft_repetition_test.json"
+DRAFT_REPORT_MD = OUT / "reports" / "eval_draft_repetition_test.md"
+DRAFT_SINGLE_RAW = OUT / "eval_draft_single_raw"
+DRAFT_SINGLE_CONFIG = OUT / "eval_draft_single_config.yaml"
+DRAFT_MULTI_RAW = OUT / "eval_draft_multi_raw"
+DRAFT_MULTI_CONFIG = OUT / "eval_draft_multi_config.yaml"
 
 
 def assert_schema(data: dict) -> None:
@@ -171,6 +178,63 @@ def main() -> int:
         default_code = eval_style.main(["--reference", str(REFERENCE), "--candidate", str(CANDIDATE_CLOSE)])
     assert default_code == 0
     assert "# Style Evaluation Summary" in default_stdout.getvalue()
+
+    draft_stdout = io.StringIO()
+    with redirect_stdout(draft_stdout):
+        draft_code = eval_draft.main(["--reference", str(REFERENCE), "--candidate", str(CANDIDATE_CLOSE)])
+    assert draft_code == 0
+    assert "# Style Evaluation Summary" in draft_stdout.getvalue()
+
+    draft_verbose_stdout = io.StringIO()
+    with redirect_stdout(draft_verbose_stdout):
+        draft_verbose_code = eval_draft.main([
+            "--reference", str(REFERENCE),
+            "--candidate", str(CANDIDATE_CLOSE),
+            "--verbose",
+        ])
+    assert draft_verbose_code == 0
+    assert "## Difference Metrics" in draft_verbose_stdout.getvalue()
+
+    draft_quiet_stdout = io.StringIO()
+    with redirect_stdout(draft_quiet_stdout):
+        draft_quiet_code = eval_draft.main([
+            "--reference", str(REFERENCE),
+            "--candidate", str(CANDIDATE_REPETITION),
+            "--out-json", str(DRAFT_REPORT_JSON),
+            "--out-md", str(DRAFT_REPORT_MD),
+            "--quiet",
+        ])
+    assert draft_quiet_code == 0
+    assert draft_quiet_stdout.getvalue() == ""
+    assert DRAFT_REPORT_JSON.exists()
+    assert DRAFT_REPORT_MD.exists()
+    assert_schema(json.loads(DRAFT_REPORT_JSON.read_text(encoding="utf-8")))
+
+    DRAFT_SINGLE_RAW.mkdir(parents=True, exist_ok=True)
+    single_ref = DRAFT_SINGLE_RAW / "reference.txt"
+    single_ref.write_text(REFERENCE.read_text(encoding="utf-8"), encoding="utf-8")
+    DRAFT_SINGLE_CONFIG.write_text(f"paths:\n  raw_data: \"{DRAFT_SINGLE_RAW}\"\n", encoding="utf-8")
+    config_stdout = io.StringIO()
+    with redirect_stdout(config_stdout):
+        config_code = eval_draft.main(["--config", str(DRAFT_SINGLE_CONFIG), "--candidate", str(CANDIDATE_CLOSE)])
+    assert config_code == 0
+    assert "# Style Evaluation Summary" in config_stdout.getvalue()
+
+    missing_stderr = io.StringIO()
+    with redirect_stderr(missing_stderr):
+        missing_code = eval_draft.main(["--reference", str(REFERENCE), "--candidate", str(OUT / "missing_draft.txt")])
+    assert missing_code == 2
+    assert "Candidate file not found" in missing_stderr.getvalue()
+
+    DRAFT_MULTI_RAW.mkdir(parents=True, exist_ok=True)
+    (DRAFT_MULTI_RAW / "a.txt").write_text("第一份参考。", encoding="utf-8")
+    (DRAFT_MULTI_RAW / "b.txt").write_text("第二份参考。", encoding="utf-8")
+    DRAFT_MULTI_CONFIG.write_text(f"paths:\n  raw_data: \"{DRAFT_MULTI_RAW}\"\n", encoding="utf-8")
+    multi_stderr = io.StringIO()
+    with redirect_stderr(multi_stderr):
+        multi_code = eval_draft.main(["--config", str(DRAFT_MULTI_CONFIG), "--candidate", str(CANDIDATE_CLOSE)])
+    assert multi_code == 2
+    assert "Multiple .txt files found" in multi_stderr.getvalue()
 
     print("eval_style fixture regression tests passed")
     return 0
