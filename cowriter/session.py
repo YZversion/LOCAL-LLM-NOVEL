@@ -145,16 +145,30 @@ class Session:
         self.accepted_text = initial_text
         self._maybe_compress()
 
-    def generate(self, instruction: str = "", target_chars: int | None = None) -> str:
+    def generate(self, instruction: str = "", target_chars: int | None = None,
+                 target_chapter: int | None = None) -> str:
+        """生成续写。
+
+        target_chapter: 当前正在续写的章节号（第N章）。
+          提供后，story_bible 检索和前情提要都只返回第 N-1 章及之前的信息，
+          防止未来信息泄漏。不提供则行为与旧版一致（无时序过滤）。
+        """
+        from cowriter.chapter import max_chapter_for_target
         chars = target_chars or self.cfg["session"]["output_tokens"]
         context_window = self.accepted_text[-self.cfg["session"]["max_recent_chars"]:]
-        retrieval = self.retriever.retrieve(context_window)
+        max_chap = max_chapter_for_target(target_chapter) if target_chapter is not None else None
+        retrieval = self.retriever.retrieve(context_window, max_chapter=max_chap)
+        prior_summary = (
+            self.retriever.get_prior_summaries(max_chap)
+            if max_chap is not None else ""
+        )
         messages = build_prompt(
             recent_text=context_window,
             summary=self.summary,
             retrieval=retrieval,
             instruction=instruction,
             target_chars=chars,
+            prior_summary=prior_summary,
         )
         return self._chat(messages)
 

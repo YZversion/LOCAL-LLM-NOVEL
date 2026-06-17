@@ -84,6 +84,38 @@ python scripts\eval_draft.py --config config.yaml --candidate <candidate.txt>
 
 ---
 
+## 系统A 时序过滤数据层（2026-06-17，代码完成，待用户验收）
+
+续写 prompt 的五块结构已于阶段2.6落地，本次任务在此基础上加入章节可见性约束，防止未来信息泄漏进 prompt。
+
+### 核心设计决策
+
+- `max_chapter_for_target(N) = N-1`：写第 N 章时，最多可见 N-1 章信息。
+- frontmatter 最小化：只用 `revealed_in: N`，不引入 `valid_from`/`valid_to`（过度工程）。
+- "无 frontmatter → 不可见"：启用时序过滤时，缺标注的文件默认不可见，防意外泄漏。
+- 聚合文件（characters/relationships/timeline/plot_threads/chapter_summaries）不加 frontmatter，temporal filter 下自动不可见；`get_prior_summaries` 直接读 `_merged_data.json` 不走 BM25。
+- `grep_raw` 已知限制：搜全量 txt 无法按章节过滤，文档已注明，仅作文风参考。
+
+### 交付物
+
+| 文件 | 变更类型 | 说明 |
+|------|----------|------|
+| `cowriter/chapter.py` | 新建 | `max_chapter_for_target(N)` |
+| `cowriter/retriever.py` | 修改 | frontmatter 解析、`search_bible(max_chapter)`、`get_prior_summaries()` |
+| `cowriter/prompts.py` | 修改 | `build_prompt(prior_summary=)` 增加【前情提要】块 |
+| `cowriter/session.py` | 修改 | `generate(target_chapter=N)` 接入时序口径 |
+| `scripts/add_frontmatter.py` | 新建 | 一次性补存量 frontmatter，支持 `--dry-run` |
+| `scripts/build_story_bible.py` | 修改 | world/style/glossary 生成函数自动前置 `revealed_in: 1` |
+| `scripts/split_characters.py` | 修改 | 拆分时自动提取 `来源章节` 写入 `revealed_in: N` |
+| `_test_temporal_filter.py` | 新建 | 7 个测试类，24 个 case，覆盖全闭环 |
+
+### 待用户操作
+
+1. `python scripts/add_frontmatter.py --dry-run` 预览，确认后去掉 `--dry-run` 执行一次。
+2. `python _test_temporal_filter.py` 全绿即验收通过。
+
+---
+
 ## 阶段4前置验证 — 评测基线建立（2026-06-17）
 
 `huihui_ai/qwen3-abliterated:8b-v2` 零微调基线：`style_score 50.92/100`（level: far），`repetition_risk: high`，`contamination_risk: low`。候选文本为 5 次连续续写（2226 字），参考为 `data/raw/风丝引_原文.txt`（364151 非空白字符）。无文本内容的指标文件提交至 `baselines/phase4_pre/baseline_metrics.json`。微调后模型需在同一参考文本上超过此分数。

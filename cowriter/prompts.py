@@ -57,10 +57,11 @@ def build_prompt(
     retrieval: dict,
     instruction: str = "",
     target_chars: int = 600,  # 保留签名兼容性；字数由 num_predict 控制，不写入 prompt
+    prior_summary: str = "",  # 按章节时序过滤的前情提要（来自 chapter_summaries）
 ) -> list[dict]:
     blocks: list[str] = []
 
-    # 1. 设定集
+    # 1. 设定集（已按章节上限过滤）
     if retrieval.get("bible"):
         parts = []
         for i, r in enumerate(retrieval["bible"][:5], 1):
@@ -73,7 +74,15 @@ def build_prompt(
             + "\n\n".join(parts)
         )
 
-    # 2. 剧情摘要
+    # 2. 前情提要（按章节时序过滤；无泄漏风险）
+    if prior_summary:
+        blocks.append(
+            "【前情提要】\n"
+            "以下是前几章的剧情摘要，只用于理解来龙去脉，不要重复叙述。\n"
+            + _clip(prior_summary, 500)
+        )
+
+    # 3. 剧情摘要（会话内滚动压缩）
     if summary:
         blocks.append(
             "【剧情摘要】\n"

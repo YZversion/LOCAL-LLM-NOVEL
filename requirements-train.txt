@@ -1,0 +1,43 @@
+# ── 阶段4 QLoRA 训练依赖 ───────────────────────────────────────────────────
+# Platform : Windows native (no WSL2 required as of Unsloth 2026.6.7)
+# GPU      : RTX 4070 Laptop (sm_89, 8188 MiB) | CUDA driver 13.2 → cu130 build
+# Python   : 3.11
+# Venv     : .venv-train/  ← isolated; do NOT install into the phase-2 env
+#
+# ── 安装顺序（必须按步骤）────────────────────────────────────────────────
+#
+# Step 1 — 先装 torch（cu130 wheel，必须先于 unsloth 安装）:
+#   pip install torch==2.10.0 torchvision==0.25.0 torchaudio \
+#       --index-url https://download.pytorch.org/whl/cu130
+#   注意：unsloth 2026.6.x 要求 torch<2.11.0；用 2.10.0 而非 2.12.0
+#
+# Step 2 — 其余训练依赖（会自动跳过 torch，因版本约束已满足）:
+#   pip install -r requirements-train.txt
+#
+# ── 一键建环境（首次）─────────────────────────────────────────────────────
+#   python -m venv .venv-train
+#   .venv-train\Scripts\Activate.ps1
+#   pip install torch==2.10.0 torchvision==0.25.0 torchaudio --index-url https://download.pytorch.org/whl/cu130
+#   pip install -r requirements-train.txt
+#
+# ── 前置验证（安装后）─────────────────────────────────────────────────────
+#   python _test_unsloth_forward.py                             # 快速平台验证（小模型）
+#   python _test_unsloth_forward.py --model Qwen/Qwen3-8B-Instruct  # 8B VRAM 测试
+# ─────────────────────────────────────────────────────────────────────────
+
+# ── Core fine-tuning stack ────────────────────────────────────────────────
+# torch is NOT listed here — install separately via Step 1 above
+unsloth>=2026.6.7
+transformers>=4.43.0
+datasets>=2.20.0
+trl>=0.9.6
+peft>=0.12.0
+accelerate>=0.30.0
+bitsandbytes>=0.44.0      # Windows native QLoRA 4-bit support from 0.44+
+
+# ── Tokenizer / serialization ─────────────────────────────────────────────
+sentencepiece>=0.2.0
+protobuf>=4.25.0
+
+# ── Utilities ─────────────────────────────────────────────────────────────
+scipy>=1.11.0

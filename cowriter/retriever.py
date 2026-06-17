@@ -1,10 +1,42 @@
+import json
+import re
 import subprocess
 from collections import Counter
 from pathlib import Path
 
 import jieba
 import jieba.posseg as pseg
+import yaml
 from rank_bm25 import BM25Okapi
+
+# ── Frontmatter ──────────────────────────────────────────────────────────────
+
+_FM_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n", re.DOTALL)
+
+
+def _parse_frontmatter(text: str) -> tuple[dict, str]:
+    """Split YAML frontmatter from Markdown body. Returns ({meta}, body)."""
+    m = _FM_RE.match(text)
+    if not m:
+        return {}, text
+    try:
+        meta = yaml.safe_load(m.group(1)) or {}
+    except Exception:
+        meta = {}
+    return (meta if isinstance(meta, dict) else {}), text[m.end():]
+
+
+# ── 聚合文件：从 BM25 索引中排除，这些文件含全书跨章节信息 ─────────────────
+_SKIP_FROM_INDEX = {
+    "characters", "relationships", "timeline",
+    "plot_threads", "chapter_summaries",
+}
+
+# ── chapter_summaries.md 解析正则 ────────────────────────────────────────────
+_CS_SECTION_RE = re.compile(r'\n(?=## )')
+_CS_NUM_RE = re.compile(r'\*\*章节编号\*\*\s*[:：]\s*(\d+)')
+_CS_SUMMARY_RE = re.compile(r'\*\*本章概要\*\*\s*[:：]\s*(.+?)(?=\n\s*-\s*\*\*|\Z)', re.DOTALL)
+_CS_HEADER_RE = re.compile(r'^##\s+(.+)')
 
 # 小说场景高频无效词（形容词、副词、状态词等，不应作为检索实体）
 _STOPWORDS = {
@@ -46,14 +78,20 @@ class Retriever:
         self._docs = []
         self._entity_names = set()
         for f in sorted(self.bible_path.rglob("*.md")):
+            rel = f.relative_to(self.bible_path)
             stem = f.stem
+            # 聚合文件排除出 BM25 索引（含全书跨章节信息，由专用函数单独处理）
+            if stem in _SKIP_FROM_INDEX and len(rel.parts) == 1:
+                continue
             self._entity_names.add(stem)
-            # 把文件名（人名/地名/功法名等）加入 jieba 词典，提高分词准确性
             jieba.add_word(stem, freq=10000)
+            raw = f.read_text(encoding="utf-8")
+            meta, body = _parse_frontmatter(raw)
             self._docs.append({
                 "source": stem,
                 "path": f,
-                "text": f.read_text(encoding="utf-8"),
+                "text": body,          # BM25 不索引 frontmatter 原文
+                "meta": meta,          # 完整 frontmatter dict，供 _visible() 使用
             })
         if self._docs:
             tokenized = [self._tokenize(d["text"]) for d in self._docs]
@@ -70,8 +108,16 @@ class Retriever:
         return 1 if rel.parts[0] == "generated" else 2
 
     def search_bible(self, query: str, top_k: int | None = None,
-                     entities: list[str] | None = None) -> list[dict]:
+                     entities: list[str] | None = None,
+                     max_chapter: int | None = None) -> list[dict]:
         """返回 {source, text, score}，text 截断至 _BIBLE_TEXT_MAX 字。
+
+        max_chapter 不为 None 时启用时序过滤：
+          - revealed_in <= max_chapter → 可见
+          - revealed_in > max_chapter  → 不可见
+          - 无 frontmatter（revealed_in=None） → 不可见（防意外泄漏）
+        max_chapter 为 None 时不过滤，行为与旧版一致。
+
         提供 entities 时，文件名精确匹配的文档强制排在 BM25 结果之前：
           根目录手写卡片 > generated/characters/ > stem 含 entity > BM25
         """
@@ -81,12 +127,30 @@ class Retriever:
         seen: set[int] = set()
         results: list[dict] = []
 
+        def _visible(idx: int) -> bool:
+            if max_chapter is None:
+                return True
+            meta = self._docs[idx].get("meta", {})
+            ri = meta.get("revealed_in")
+            vf = meta.get("valid_from")
+            vt = meta.get("valid_to")
+            # 两个字段都必须存在，任一缺失则视为不可见（防意外泄漏）
+            if not isinstance(ri, int) or not isinstance(vf, int):
+                return False
+            return (
+                ri <= max_chapter
+                and vf <= max_chapter
+                and (vt is None or (isinstance(vt, int) and vt >= max_chapter))
+            )
+
         # ── 文件名精确 / 弱匹配提权 ──────────────────────────────────────
         if entities:
             exact: list[tuple[int, int]] = []   # (path_priority, doc_idx)
             weak: list[int] = []
             for entity in entities:
                 for i, doc in enumerate(self._docs):
+                    if not _visible(i):
+                        continue
                     stem = doc["source"]
                     p = doc.get("path")
                     if stem == entity:
@@ -118,6 +182,8 @@ class Retriever:
             for i in ranked:
                 if scores[i] <= 0:
                     break
+                if not _visible(i):
+                    continue
                 if i not in seen:
                     seen.add(i)
                     doc = self._docs[i]
@@ -198,17 +264,76 @@ class Retriever:
 
         return entities[:top_n]
 
+    # ── 前情提要（按章节时序，直接解析 chapter_summaries.md）───────────────
+
+    def get_prior_summaries(self, up_to_chapter: int, max_chars: int = 400) -> str:
+        """从 chapter_summaries.md 解析章节摘要，只返回 chapter_number <= up_to_chapter 的条目。
+
+        不依赖 _merged_data.json（该文件结构已损坏）。
+
+        支持格式：
+          ## 第N章 <标题>
+          - **章节编号**: N
+          - **本章概要**: ...
+          - **出场人物**: ...
+          ---
+        """
+        summaries_path = self.bible_path / "chapter_summaries.md"
+        if not summaries_path.exists():
+            return ""
+        try:
+            text = summaries_path.read_text(encoding="utf-8")
+        except Exception:
+            return ""
+
+        sections = _CS_SECTION_RE.split(text)
+        filtered: list[tuple[int, str, str]] = []  # (chapter_num, title, summary)
+
+        for section in sections:
+            section = section.strip()
+            if not section.startswith("##"):
+                continue
+            m_num = _CS_NUM_RE.search(section)
+            if not m_num:
+                continue
+            ch_num = int(m_num.group(1))
+            if ch_num > up_to_chapter:
+                continue
+            m_sum = _CS_SUMMARY_RE.search(section)
+            what = m_sum.group(1).strip() if m_sum else ""
+            if not what or what == "未明确":
+                continue
+            m_hdr = _CS_HEADER_RE.match(section)
+            title = m_hdr.group(1).strip() if m_hdr else f"第{ch_num}章"
+            filtered.append((ch_num, title, what))
+
+        filtered.sort(key=lambda x: x[0])
+
+        parts: list[str] = []
+        total = 0
+        for _, title, what in filtered:
+            line = f"[{title}] {what}"
+            if total + len(line) + 1 > max_chars:
+                break
+            parts.append(line)
+            total += len(line) + 1
+
+        return "\n".join(parts)
+
     # ── 主入口 ───────────────────────────────────────────────────────────────
 
-    def retrieve(self, context: str) -> dict:
+    def retrieve(self, context: str, max_chapter: int | None = None) -> dict:
+        """检索 story_bible 和原文。max_chapter 不为 None 时启用时序过滤。
+
+        注意：grep_raw 搜索原始 txt，无法按章节过滤——grep 结果不受 max_chapter 约束，
+        仅作文风参考，不应携带关键设定信息。
+        """
         recent = context[-500:]
         entities = self.extract_entities(recent)
 
-        # bible query = 实体名拼接 + 最近 150 字（让 BM25 有足够上下文）
         bible_query = " ".join(entities) + " " + context[-150:]
-        bible_hits = self.search_bible(bible_query, entities=entities)
+        bible_hits = self.search_bible(bible_query, entities=entities, max_chapter=max_chapter)
 
-        # grep 前 3 个实体，结果去重
         seen_grep: set[str] = set()
         grep_hits: list[str] = []
         for entity in entities[:3]:

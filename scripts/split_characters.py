@@ -10,6 +10,40 @@ from pathlib import Path
 
 import yaml
 
+_SOURCE_CH_RE = re.compile(
+    r"第\s*([0-9]{1,4}|[零〇一二三四五六七八九十百千万两]{1,8})\s*章"
+)
+_CN = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+       "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+_UNIT = {"十": 10, "百": 100, "千": 1000, "万": 10000}
+
+
+def _cn_to_int(s: str) -> int | None:
+    s = s.strip()
+    if s.isdigit():
+        return int(s)
+    total = section = num = 0
+    used = False
+    for c in s:
+        if c in _CN:
+            num = _CN[c]; used = True
+        elif c in _UNIT:
+            u = _UNIT[c]; used = True
+            if u == 10000:
+                section = (section + num) * u; total += section; section = 0
+            else:
+                section += (num or 1) * u
+            num = 0
+        else:
+            return None
+    return (total + section + num) if used else None
+
+
+def _min_chapter(text: str) -> int:
+    chapters = [n for m in _SOURCE_CH_RE.finditer(text)
+                if (n := _cn_to_int(m.group(1))) is not None and n > 0]
+    return min(chapters) if chapters else 1
+
 
 def split(src: Path, out_dir: Path) -> list[str]:
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -26,7 +60,9 @@ def split(src: Path, out_dir: Path) -> list[str]:
         file_name = re.sub(r"[（(][^）)]*[）)]", "", raw_name).strip()
         if not file_name:
             continue
-        (out_dir / f"{file_name}.md").write_text(part.strip(), encoding="utf-8")
+        revealed_in = _min_chapter(part)
+        frontmatter = f"---\nrevealed_in: {revealed_in}\n---\n\n"
+        (out_dir / f"{file_name}.md").write_text(frontmatter + part.strip(), encoding="utf-8")
         created.append(file_name)
     return created
 
