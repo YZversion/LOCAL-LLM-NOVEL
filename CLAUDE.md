@@ -70,8 +70,8 @@
 
 ## 阶段4前置测试清单
 
-- [ ] 确认当前运行依赖安装正常：`python _test_eval_style.py`
-- [ ] 确认阶段3评测 wrapper 可作为训练前基线工具：`python scripts/eval_draft.py --reference <reference.txt> --candidate <candidate.txt>`
+- [x] 确认当前运行依赖安装正常：`python _test_eval_style.py`（2026-06-17 通过）
+- [x] 确认阶段3评测 wrapper 可作为训练前基线工具：`python scripts/eval_draft.py --reference <reference.txt> --candidate <candidate.txt>`（2026-06-17 通过；基线已提交至 `baselines/phase4_pre/baseline_metrics.json`；style_score 50.92/100，repetition_risk high，contamination_risk low）
 - [ ] 确认训练依赖方案：不要在 `requirements.txt` 直接解注释训练依赖，后续单独创建 `requirements-train.txt`
 - [ ] 验证 Unsloth 与 CUDA 13.2 兼容性：先跑最小 forward pass，再动训练数据
 - [ ] 确认单次训练显存峰值目标：小于 8GB

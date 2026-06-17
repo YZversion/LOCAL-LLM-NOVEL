@@ -1,0 +1,209 @@
+{
+  "meta": {
+    "tool": "eval_style.py",
+    "version": "3.6",
+    "created_at": "2026-06-17T10:15:44+08:00",
+    "schema_version": "1.0",
+    "notes": [],
+    "baseline_model": "huihui_ai/qwen3-abliterated:8b-v2",
+    "config_note": "config.yaml generation params as of 2026-06-17: temperature=0.8 top_p=0.8 top_k=20 repeat_penalty=1.15 repeat_last_n=256 presence_penalty=0.3 frequency_penalty=0.3 dry_multiplier=0.8 dry_base=1.75 dry_allowed_length=2 dry_penalty_last_n=512 output_tokens=600",
+    "sanitization": "text-bearing example fields removed; numeric metrics retained"
+  },
+  "inputs": {
+    "reference": "data\\raw\\风丝引_原文.txt",
+    "candidate": "outputs\\draft_baseline_phase4.txt",
+    "reference_exists": true,
+    "candidate_exists": true,
+    "reference_size_bytes": 1097665,
+    "candidate_size_bytes": 6617
+  },
+  "reference_stats": {
+    "char_count": 370399,
+    "non_whitespace_char_count": 364151,
+    "line_count": 6189,
+    "paragraph_count": 120,
+    "sentence_count": 9981,
+    "average_sentence_length": 36.4844,
+    "median_sentence_length": 35.0,
+    "longest_sentence_length": 246,
+    "dialogue_line_count": 1871,
+    "dialogue_line_ratio": 0.3113
+  },
+  "candidate_stats": {
+    "char_count": 2226,
+    "non_whitespace_char_count": 2165,
+    "line_count": 62,
+    "paragraph_count": 27,
+    "sentence_count": 87,
+    "average_sentence_length": 24.8851,
+    "median_sentence_length": 26.0,
+    "longest_sentence_length": 50,
+    "dialogue_line_count": 14,
+    "dialogue_line_ratio": 0.3889
+  },
+  "segmentation": {
+    "reference": {
+      "paragraph_count": 120,
+      "sentence_count": 9981,
+      "dialogue_line_count": 1871,
+      "avg_sentences_per_paragraph": 83.175
+    },
+    "candidate": {
+      "paragraph_count": 27,
+      "sentence_count": 87,
+      "dialogue_line_count": 14,
+      "avg_sentences_per_paragraph": 3.2222
+    }
+  },
+  "repetition": {
+    "duplicate_line_count": 20,
+    "duplicate_line_ratio": 0.5556,
+    "duplicate_paragraph_count": 13,
+    "duplicate_paragraph_ratio": 0.4815,
+    "consecutive_repeated_sentence_count": 0,
+    "longest_repeated_sentence_run": 1,
+    "near_duplicate_adjacent_sentences": {
+      "count": 5
+    },
+    "char_ngrams": {
+      "2": [
+        20,
+        20,
+        20,
+        20,
+        9,
+        9,
+        9,
+        9,
+        8,
+        8
+      ],
+      "3": [
+        20,
+        20,
+        9,
+        9,
+        7,
+        7,
+        7,
+        7,
+        6,
+        6
+      ],
+      "4": [
+        9,
+        9,
+        7,
+        7,
+        7,
+        6,
+        6,
+        5,
+        5,
+        5
+      ]
+    },
+    "short_sentence_loops": {
+      "detected": false,
+      "count": 0
+    },
+    "repetition_risk": "high"
+  },
+  "contamination": {
+    "overlapping_sentence_count": 2,
+    "overlapping_sentence_ratio": 0.0244,
+    "longest_common_substring_length": 53,
+    "contamination_risk": "low",
+    "exact_sentence_overlap": {
+      "count": 2,
+      "ratio": 0.0244
+    },
+    "normalized_sentence_overlap": {
+      "count": 2,
+      "ratio": 0.0244
+    },
+    "near_sentence_overlap": {
+      "count": 1,
+      "ratio": 0.0122
+    },
+    "char_shingle_overlap": {
+      "8": {
+        "candidate_total": 1929,
+        "overlap_count": 120,
+        "overlap_ratio": 0.0622
+      },
+      "12": {
+        "candidate_total": 1925,
+        "overlap_count": 98,
+        "overlap_ratio": 0.0509
+      },
+      "20": {
+        "candidate_total": 1917,
+        "overlap_count": 72,
+        "overlap_ratio": 0.0376
+      }
+    },
+    "longest_common_substring": {
+      "length": 53
+    },
+    "paragraph_overlap": {
+      "exact_count": 0,
+      "normalized_count": 0
+    }
+  },
+  "diff": {
+    "char_count_difference_ratio": -0.9941,
+    "char_count_ratio": 0.006,
+    "non_whitespace_char_count_ratio": 0.0059,
+    "sentence_count_ratio": 0.0087,
+    "paragraph_count_ratio": 0.225,
+    "avg_sentence_length_diff": -11.5993,
+    "average_sentence_length_diff": -11.5993,
+    "avg_sentence_length_ratio": 0.6821,
+    "median_sentence_length_diff": -9.0,
+    "dialogue_line_ratio_diff": 0.0776,
+    "avg_sentences_per_paragraph_diff": -79.9528,
+    "repetition_risk": "high",
+    "contamination_risk": "low"
+  },
+  "style_score": {
+    "overall": 50.9188,
+    "level": "far",
+    "components": {
+      "length_profile": {
+        "score": 0.1487,
+        "weight": 20
+      },
+      "sentence_profile": {
+        "score": 19.9401,
+        "weight": 25
+      },
+      "paragraph_profile": {
+        "score": 3.75,
+        "weight": 15
+      },
+      "dialogue_profile": {
+        "score": 14.08,
+        "weight": 15
+      },
+      "repetition_penalty": {
+        "score": 3.0,
+        "weight": 15
+      },
+      "contamination_penalty": {
+        "score": 10.0,
+        "weight": 10
+      }
+    }
+  },
+  "summary": {
+    "overall_warning": [
+      "Repetition risk is high."
+    ],
+    "notes": [
+      "Reference and candidate lengths differ substantially.",
+      "Style score level is far (50.9188/100).",
+      "Repetition risk reduces style score."
+    ]
+  }
+}

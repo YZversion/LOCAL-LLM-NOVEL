@@ -81,3 +81,9 @@ python -m py_compile scripts\eval_draft.py
 python scripts\eval_draft.py --reference <reference.txt> --candidate <candidate.txt>
 python scripts\eval_draft.py --config config.yaml --candidate <candidate.txt>
 ```
+
+---
+
+## 阶段4前置验证 — 评测基线建立（2026-06-17）
+
+`huihui_ai/qwen3-abliterated:8b-v2` 零微调基线：`style_score 50.92/100`（level: far），`repetition_risk: high`，`contamination_risk: low`。候选文本为 5 次连续续写（2226 字），参考为 `data/raw/风丝引_原文.txt`（364151 非空白字符）。无文本内容的指标文件提交至 `baselines/phase4_pre/baseline_metrics.json`。微调后模型需在同一参考文本上超过此分数。
