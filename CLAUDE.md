@@ -92,7 +92,7 @@ and (valid_to is None or valid_to >= max_chapter)
 当前 `data/story_bible/` 中可检索文件已补齐 `revealed_in` / `valid_from` / `valid_to`。
 聚合文件（characters/relationships/timeline/plot_threads/chapter_summaries）不加 frontmatter，temporal filter 下自动不可见。
 
-⚠️ 已知坑：`scripts/build_story_bible.py` 的 world/style/glossary 生成逻辑、`scripts/split_characters.py` 的单人物生成逻辑仍可能写出旧版最小 frontmatter（只有 `revealed_in`）。重跑这些脚本前，先修复它们生成完整 frontmatter，否则生成文件会在时序过滤下不可见。
+`scripts/build_story_bible.py` 的 world/style/glossary 生成逻辑、`scripts/split_characters.py` 的单人物生成逻辑已修复，会写出完整 frontmatter，避免重跑后卡片在时序过滤下不可见。
 
 ---
 
@@ -104,7 +104,7 @@ and (valid_to is None or valid_to >= max_chapter)
 [✓] 阶段2.6  模型迁移 + 补全式续写改造
 [ ] 阶段1    数据清洗（prepare_data.py，用户自有脚本）
 [✓] 阶段3    确定性文风评测工具（2026-06-17 验收通过）
-[✓] 系统A    时序过滤数据层（2026-06-17 验收通过，43/43 测试全绿）
+[✓] 系统A    时序过滤数据层（2026-06-17 验收通过，45/45 测试全绿）
 [✓] 系统A数据  chapter_summaries.md ch1-58 补全（2026-06-17 完成）
 [ ] 系统B    知识图谱 + story_bible 动态写回  ← 当前焦点
 [ ] 阶段4    QLoRA 微调（系统B稳定后）
@@ -143,7 +143,7 @@ and (valid_to is None or valid_to >= max_chapter)
 数据文件：`data/story_bible/kg.json`（gitignore，不入库）
 
 系统B 当前任务清单：
-- [ ] 修复 `build_story_bible.py` / `split_characters.py` 的完整 frontmatter 生成，避免重跑后让卡片不可见
+- [x] 修复 `build_story_bible.py` / `split_characters.py` 的完整 frontmatter 生成，避免重跑后让卡片不可见
 - [ ] `scripts/kg_extract.py` — LLM 从章节文本抽取实体和关系
 - [ ] `scripts/kg_update.py` — 合并新实体进 kg.json，处理冲突与状态时间线
 - [ ] `scripts/kg_render.py` — 从 kg.json 渲染 .md 卡片（含 frontmatter）
@@ -159,7 +159,7 @@ and (valid_to is None or valid_to >= max_chapter)
 - [x] 确认阶段3评测 wrapper 可作为训练前基线工具（2026-06-17 通过；style_score 50.92/100）
 - [x] 确认训练依赖方案：`requirements-train.txt` 已创建，`.venv-train/` 隔离
 - [x] `scripts/add_frontmatter.py` 运行完毕，29 个文件已补 frontmatter（2026-06-17）
-- [x] `python _test_temporal_filter.py` 43/43 全绿（2026-06-17）
+- [x] `python _test_temporal_filter.py` 45/45 全绿（2026-06-17）
 - [ ] 修复 `.venv-train/` torch CPU 降级（`pip install torch==2.10.0 ... --index-url https://download.pytorch.org/whl/cu130`）
 - [ ] 跑 `_test_unsloth_forward.py`（Qwen2.5-0.5B）确认 CUDA + Unsloth 可用
 - [ ] 跑 `_test_unsloth_forward.py --model Qwen/Qwen3-8B-Instruct` 确认显存峰值 < 8GB
@@ -182,8 +182,8 @@ and (valid_to is None or valid_to >= max_chapter)
 | `pipeline/eval_style.py` | 阶段3确定性评测核心 |
 | `scripts/eval_draft.py` | 阶段3评测 wrapper |
 | `scripts/add_frontmatter.py` | 存量 story_bible 补完整 frontmatter（已运行完毕，勿重复）|
-| `scripts/build_story_bible.py` | 从 raw txt 构建 story_bible；重跑前需修复 world/style/glossary 的完整 frontmatter |
-| `scripts/split_characters.py` | 拆分人物 Markdown；重跑前需修复单人物完整 frontmatter |
+| `scripts/build_story_bible.py` | 从 raw txt 构建 story_bible；world/style/glossary 会写完整 frontmatter |
+| `scripts/split_characters.py` | 拆分人物 Markdown；单人物卡片会写完整 frontmatter |
 | `scripts/gen_chapter_summaries.py` | 从原文批量生成章节摘要追加到 chapter_summaries.md |
 | `scripts/kg_extract.py` | 【系统B】LLM 从章节文本抽取实体/关系（待实现） |
 | `scripts/kg_update.py` | 【系统B】合并新实体进 kg.json（待实现） |

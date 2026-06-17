@@ -326,6 +326,72 @@ class TestGetPriorSummaries(unittest.TestCase):
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# 单元/集成：story_bible 生成脚本必须写完整 temporal frontmatter
+# ────────────────────────────────────────────────────────────────────────────
+
+class TestStoryBibleGenerators(unittest.TestCase):
+    def setUp(self):
+        sys.path.insert(0, str(Path(__file__).parent / "scripts"))
+
+    def test_build_story_bible_static_files_get_full_frontmatter(self):
+        import build_story_bible as bsb
+
+        samples = {
+            "world": bsb.generate_world_md({}),
+            "style": bsb.generate_style_md({}),
+            "glossary": bsb.generate_glossary_md([]),
+        }
+        for name, content in samples.items():
+            with self.subTest(name=name):
+                self.assertTrue(content.startswith("---\n"))
+                self.assertIn(f"title: {name}", content)
+                self.assertIn("revealed_in: 1", content)
+                self.assertIn("valid_from: 1", content)
+                self.assertIn("valid_to: null", content)
+
+    def test_split_characters_writes_visible_full_frontmatter(self):
+        import split_characters as sc
+
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            bible_dir = Path(tmp.name) / "story_bible"
+            raw_dir = Path(tmp.name) / "raw"
+            raw_dir.mkdir(parents=True)
+            src = bible_dir / "characters.md"
+            out_dir = bible_dir / "generated" / "characters"
+            src.parent.mkdir(parents=True)
+            src.write_text(
+                "# characters\n\n"
+                "## 人物设定\n\n"
+                "### 林清雪（女神医）\n\n"
+                "- **别名/称呼**: 女神医、林神医\n"
+                "- **来源章节**: 第3章、第7章\n"
+                "- **身份**: 林家传人\n",
+                encoding="utf-8",
+            )
+
+            names = sc.split(src, out_dir)
+            self.assertEqual(names, ["林清雪"])
+            content = (out_dir / "林清雪.md").read_text(encoding="utf-8")
+            self.assertIn("title: 林清雪", content)
+            self.assertIn("type: character", content)
+            self.assertIn("aliases:", content)
+            self.assertIn("revealed_in: 3", content)
+            self.assertIn("valid_from: 3", content)
+            self.assertIn("valid_to: null", content)
+            self.assertIn("source_chapters:", content)
+            self.assertIn("  - 7", content)
+
+            r = _make_retriever(bible_dir, raw_dir)
+            visible = r.search_bible("", entities=["林清雪"], max_chapter=3)
+            hidden = r.search_bible("", entities=["林清雪"], max_chapter=2)
+            self.assertIn("林清雪", {h["source"] for h in visible})
+            self.assertNotIn("林清雪", {h["source"] for h in hidden})
+        finally:
+            tmp.cleanup()
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # 单元：add_frontmatter.py 辅助函数（更新后接口）
 # ────────────────────────────────────────────────────────────────────────────
 

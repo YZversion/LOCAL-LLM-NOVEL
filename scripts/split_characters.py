@@ -39,10 +39,50 @@ def _cn_to_int(s: str) -> int | None:
     return (total + section + num) if used else None
 
 
+def _chapters(text: str) -> list[int]:
+    chapters = [
+        n for m in _SOURCE_CH_RE.finditer(text)
+        if (n := _cn_to_int(m.group(1))) is not None and n > 0
+    ]
+    return sorted(set(chapters))
+
+
 def _min_chapter(text: str) -> int:
-    chapters = [n for m in _SOURCE_CH_RE.finditer(text)
-                if (n := _cn_to_int(m.group(1))) is not None and n > 0]
-    return min(chapters) if chapters else 1
+    chapters = _chapters(text)
+    return chapters[0] if chapters else 1
+
+
+def _extract_aliases(text: str) -> list[str]:
+    m = re.search(r'\*\*别名[/／]称呼\*\*\s*[:：]\s*(.+)', text)
+    if not m:
+        return []
+    parts = re.split(r'[、，,/\s]+', m.group(1).strip())
+    return [p for p in parts if p and p not in ("未明确", "无")]
+
+
+def make_frontmatter(title: str, revealed_in: int,
+                     aliases: list[str] | None = None,
+                     source_chapters: list[int] | None = None) -> str:
+    lines = [
+        "---",
+        f"title: {title}",
+        "type: character",
+    ]
+    if aliases:
+        lines.append("aliases:")
+        for alias in aliases:
+            lines.append(f"  - {alias}")
+    lines.extend([
+        f"revealed_in: {revealed_in}",
+        f"valid_from: {revealed_in}",
+        "valid_to: null",
+    ])
+    chapters = source_chapters or [revealed_in]
+    lines.append("source_chapters:")
+    for ch in sorted(set(chapters)):
+        lines.append(f"  - {ch}")
+    lines.append("---")
+    return "\n".join(lines) + "\n\n"
 
 
 def split(src: Path, out_dir: Path) -> list[str]:
@@ -60,8 +100,14 @@ def split(src: Path, out_dir: Path) -> list[str]:
         file_name = re.sub(r"[（(][^）)]*[）)]", "", raw_name).strip()
         if not file_name:
             continue
-        revealed_in = _min_chapter(part)
-        frontmatter = f"---\nrevealed_in: {revealed_in}\n---\n\n"
+        chapters = _chapters(part)
+        revealed_in = chapters[0] if chapters else 1
+        frontmatter = make_frontmatter(
+            file_name,
+            revealed_in,
+            aliases=_extract_aliases(part),
+            source_chapters=chapters or [revealed_in],
+        )
         (out_dir / f"{file_name}.md").write_text(frontmatter + part.strip(), encoding="utf-8")
         created.append(file_name)
     return created

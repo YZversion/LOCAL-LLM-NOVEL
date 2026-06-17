@@ -1138,7 +1138,22 @@ def generate_characters_md(characters: list[dict[str, Any]]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-_FM1 = "---\nrevealed_in: 1\n---\n\n"
+def make_frontmatter(title: str, entry_type: str,
+                     revealed_in: int = 1,
+                     valid_from: int | None = None,
+                     valid_to: int | None = None) -> str:
+    """Generate the full temporal frontmatter required by Retriever._visible()."""
+    valid_from = revealed_in if valid_from is None else valid_from
+    vt = "null" if valid_to is None else str(valid_to)
+    return (
+        "---\n"
+        f"title: {title}\n"
+        f"type: {entry_type}\n"
+        f"revealed_in: {revealed_in}\n"
+        f"valid_from: {valid_from}\n"
+        f"valid_to: {vt}\n"
+        "---\n\n"
+    )
 
 
 def generate_world_md(world: dict[str, Any]) -> str:
@@ -1161,7 +1176,7 @@ def generate_world_md(world: dict[str, Any]) -> str:
             append_evidence(lines, item.get("evidence"))
             append_conflicts(lines, item)
             lines.extend(["", "---", ""])
-    return _FM1 + "\n".join(lines).rstrip() + "\n"
+    return make_frontmatter("world", "worldbuilding") + "\n".join(lines).rstrip() + "\n"
 
 
 def generate_timeline_md(events: list[dict[str, Any]]) -> str:
@@ -1305,7 +1320,7 @@ def generate_style_md(style: dict[str, Any]) -> str:
     lines.extend(["", "### 典型原文短句", ""])
     samples = unique_strings(as_list(style.get("sample_sentences")), limit=20, clip=180)
     lines.extend([f"> {item}" for item in samples] or ["> 未明确"])
-    return _FM1 + "\n".join(lines).rstrip() + "\n"
+    return make_frontmatter("style", "style") + "\n".join(lines).rstrip() + "\n"
 
 
 def generate_glossary_md(glossary: list[dict[str, Any]]) -> str:
@@ -1332,7 +1347,7 @@ def generate_glossary_md(glossary: list[dict[str, Any]]) -> str:
             append_evidence(lines, item.get("evidence"))
             append_conflicts(lines, item)
             lines.extend(["", "---", ""])
-    return _FM1 + "\n".join(lines).rstrip() + "\n"
+    return make_frontmatter("glossary", "glossary") + "\n".join(lines).rstrip() + "\n"
 
 
 GENERATORS = {

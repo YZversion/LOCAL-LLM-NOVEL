@@ -26,8 +26,8 @@ LOCAL-LLM-NOVEL/
 │  ├─ prompts.py               # 补全式续写 prompt 与摘要 prompt（含前情提要块）
 │  └─ chapter.py               # max_chapter_for_target(N) 时序口径工具函数
 ├─ scripts/
-│  ├─ build_story_bible.py     # 从 raw txt 构建 story_bible；重跑前需修复完整 frontmatter
-│  ├─ split_characters.py      # 将人物汇总拆成单人物 Markdown；重跑前需修复完整 frontmatter
+│  ├─ build_story_bible.py     # 从 raw txt 构建 story_bible；world/style/glossary 写完整 frontmatter
+│  ├─ split_characters.py      # 将人物汇总拆成单人物 Markdown；单人物卡片写完整 frontmatter
 │  ├─ add_frontmatter.py       # 一次性：给存量 story_bible .md 补完整 frontmatter
 │  ├─ gen_chapter_summaries.py # 从原文生成缺失章节摘要，追加到 chapter_summaries.md
 │  └─ eval_draft.py            # 阶段3：对已有草稿运行确定性评测的 wrapper
@@ -50,7 +50,7 @@ LOCAL-LLM-NOVEL/
 │  └─ fixtures/eval_style/     # 阶段3固定假文本回归样本，不含真实小说原文
 └─ _test_*.py                  # 阶段性回归/实机验证脚本
    # _test_eval_style.py       阶段3
-   # _test_temporal_filter.py  系统A时序过滤（43 case）
+   # _test_temporal_filter.py  系统A时序过滤（45 case）
    # _test_unsloth_forward.py  阶段4前置：CUDA + Unsloth 实机验证
 ```
 
@@ -238,10 +238,10 @@ python _test_eval_style.py
 ## Story Bible Build
 
 ```powershell
-# 构建 story_bible（重跑前先修复完整 frontmatter 生成）
+# 构建 story_bible（world/style/glossary 写完整 frontmatter）
 python scripts/build_story_bible.py --config config.yaml
 
-# 拆分人物（重跑前先修复完整 frontmatter 生成）
+# 拆分人物（单人物卡片写完整 frontmatter）
 python scripts/split_characters.py
 
 # 给存量手写卡片补 frontmatter（一次性，之后幂等）
@@ -253,7 +253,7 @@ python scripts/add_frontmatter.py             # 确认后执行
 
 `Retriever._load_bible()` 使用 `rglob("*.md")` 递归扫描，`generated/` 下的文件会自动进入 BM25 索引。
 
-当前实际 `data/story_bible/` 中可检索 `.md` 已补齐 `revealed_in` / `valid_from` / `valid_to`。但 `build_story_bible.py` 的 world/style/glossary 生成函数、`split_characters.py` 的单人物生成函数仍可能写出只有 `revealed_in` 的旧版 frontmatter；重跑前需要先修复这两个脚本，否则新写出的卡片会在时序过滤下不可见。
+当前实际 `data/story_bible/` 中可检索 `.md` 已补齐 `revealed_in` / `valid_from` / `valid_to`。`build_story_bible.py` 的 world/style/glossary 生成函数、`split_characters.py` 的单人物生成函数也已修复，重跑后仍会写完整 temporal frontmatter。
 
 ## Retrieval Flow
 
