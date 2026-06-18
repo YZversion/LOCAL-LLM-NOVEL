@@ -53,7 +53,7 @@ LORA_TARGETS = [        # Unsloth: standard Qwen/Llama target modules
 MAX_SEQ_LENGTH = 2048   # Unsloth Qwen3 notebook default; overridden by --max-seq-length
 LEARNING_RATE = 2e-4    # Unsloth README standard starter
 GRAD_ACCUM = 4          # Unsloth README default (effective batch = 4)
-WARMUP_STEPS = 5        # Unsloth notebook default
+WARMUP_STEPS = 1        # 1 step warmup；5 was equal to total steps (5) → LR never reached peak
 RANDOM_STATE = 3407     # Unsloth notebook default
 
 
@@ -177,7 +177,10 @@ def run(args) -> int:
 
     # ── 4. SFTTrainer ────────────────────────────────────────────────────────
     print("--- Setting up SFTTrainer ---")
-    output_dir = "outputs/qlora_vram_test" if not args.full_run else "outputs/qlora_run"
+    if args.output_dir:
+        output_dir = args.output_dir
+    else:
+        output_dir = "outputs/qlora_vram_test" if not args.full_run else "outputs/qlora_run"
 
     trainer = SFTTrainer(
         model=model,
@@ -307,6 +310,11 @@ def main() -> int:
         type=int,
         default=MAX_SEQ_LENGTH,
         help=f"Max sequence length (default: {MAX_SEQ_LENGTH}). Use 1024 to test reduced budget.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Override output directory for adapter save (default: outputs/qlora_vram_test or outputs/qlora_run).",
     )
     args = parser.parse_args()
 

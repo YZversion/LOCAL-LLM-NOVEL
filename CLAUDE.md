@@ -117,20 +117,24 @@ and (valid_to is None or valid_to >= max_chapter)
 
 关键边界：QLoRA 负责文风、节奏、表达习惯和大纲遵循，不负责动态记住新角色。人物记忆缺口要在 System B / story_bible 检索链路中单独验收；不要把记忆缺失当成微调文风失败，也不要把文风失败归因给记忆系统。
 
-当前项目体检（2026-06-17）：
+当前项目体检（2026-06-18）：
 - `chapter_summaries.md` 已覆盖 1-58 章。
 - `generated/characters/` 当前有 21 个单人物文件。
 - 当前可检索 `.md` 已检查具备 `revealed_in` / `valid_from` / `valid_to`。
 - `data/story_bible/kg.json` 尚不存在；`scripts/kg_extract.py`、`scripts/kg_update.py`、`scripts/kg_render.py`、`scripts/update_kg.py` 尚未创建。
-- 阶段4当前卡点是 `.venv-train/` torch CPU 降级；修复后先跑 Unsloth forward 和 8B 显存边界测试。
+- 阶段4环境已跑通：`.venv-train/` 为 `torch 2.10.0+cu130`，Qwen2.5-0.5B 最小 Unsloth forward 通过。
+- 8B 4-bit 推理显存已通过：`huihui-ai/Huihui-Qwen3-8B-abliterated-v2` peak 5.80 GB，reserved 5.91 GB。
+- 小样本训练数据已构造并验证：20 条，ch2-21，`_test_train_samples.py` 20/20 全绿。
+- 当前卡点是训练态 OOM：`max_seq_length=2048` + 4-bit + LoRA r=16 + batch=1 + `gc=unsloth` 在 fused CE 阶段显存不足。
 
 阶段4当前任务清单：
-- [ ] 检查 `.venv-train/` 中 torch 是否为 CUDA build
-- [ ] 若仍是 CPU build，按 `requirements-train.txt` 顺序重装 `torch==2.10.0` cu130 wheel
-- [ ] 跑 `_test_unsloth_forward.py`（小模型）确认 CUDA + Unsloth 可用
-- [ ] 跑 `_test_unsloth_forward.py --model Qwen/Qwen3-8B-Instruct` 确认 8B 显存峰值 < 8GB
-- [ ] 构造遵守 `target_chapter=N -> max_chapter=N-1` 的小规模训练样本
-- [ ] 小样本 QLoRA 试训，并用阶段3基线验证 `style_score > 50.92`
+- [x] 检查并修复 `.venv-train/` torch CUDA build
+- [x] 跑 `_test_unsloth_forward.py`（Qwen2.5-0.5B）确认 CUDA + Unsloth 可用
+- [x] 跑 `_test_unsloth_forward.py --model huihui-ai/Huihui-Qwen3-8B-abliterated-v2` 确认 8B 4-bit 推理显存 < 8GB
+- [x] 构造遵守 `target_chapter=N -> max_chapter=N-1` 的小规模训练样本
+- [x] 跑 `_test_train_samples.py` 验证训练样本时序口径
+- [ ] 修复训练态 OOM：先降 `max_seq_length` 到 512，或重建 `context_chars=300` / `completion_chars=200` 的短样本后重测
+- [ ] 小样本 QLoRA 完整 1 epoch，生成 LoRA candidate，并用阶段3基线验证 `style_score > 50.92`
 
 ---
 
@@ -206,7 +210,10 @@ System B 后续任务清单（延后）：
 | `scripts/kg_render.py` | 【系统B】从 kg.json 渲染 .md 卡片（待实现） |
 | `scripts/update_kg.py` | 【系统B】三步合一入口（待实现） |
 | `data/story_bible/kg.json` | 【系统B】知识图谱主文件（gitignore，不入库） |
-| `pipeline/train_qlora.py` | 阶段4训练入口，占位 |
+| `pipeline/build_train_samples.py` | 阶段4训练样本构造入口；必须遵守 `target_chapter=N -> max_chapter=N-1` |
+| `_test_train_samples.py` | 阶段4训练样本时序过滤与章节对齐验证 |
+| `pipeline/train_qlora.py` | 阶段4 QLoRA 训练态显存实测与小样本训练入口 |
+| `pipeline/generate_lora.py` | 阶段4 LoRA adapter 候选文本生成入口 |
 | `pipeline/export_gguf.py` | 阶段4导出入口，占位 |
 | `architecture.md` | 系统架构文档 |
 | `docs/history.md` | 阶段历史归档，不作为当前工作规程 |

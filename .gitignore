@@ -34,6 +34,7 @@ env/
 dist/
 build/
 .pytest_cache/
+unsloth_compiled_cache/
 
 # ── Jupyter ──────────────────────────────────────────────────────────────────
 .ipynb_checkpoints/

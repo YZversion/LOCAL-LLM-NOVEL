@@ -44,7 +44,9 @@ LOCAL-LLM-NOVEL/
 ├─ pipeline/                   # 数据清洗、评估、训练、导出相关脚本
 │  ├─ prepare_data.py          # 阶段1占位：用户自有清洗脚本入口
 │  ├─ eval_style.py            # 阶段3：确定性文风评测 CLI
-│  ├─ train_qlora.py           # 阶段4占位：QLoRA 训练
+│  ├─ build_train_samples.py   # 阶段4：构造遵守章节口径的 QLoRA 训练样本
+│  ├─ train_qlora.py           # 阶段4：训练态显存实测与小样本 QLoRA 训练
+│  ├─ generate_lora.py         # 阶段4：用 LoRA adapter 生成候选文本供评测
 │  └─ export_gguf.py           # 阶段4占位：GGUF 导出
 ├─ tests/
 │  └─ fixtures/eval_style/     # 阶段3固定假文本回归样本，不含真实小说原文
@@ -52,6 +54,7 @@ LOCAL-LLM-NOVEL/
    # _test_eval_style.py       阶段3
    # _test_temporal_filter.py  系统A时序过滤（45 case）
    # _test_unsloth_forward.py  阶段4前置：CUDA + Unsloth 实机验证
+   # _test_train_samples.py    阶段4：训练样本时序过滤与章节对齐
 ```
 
 ## Data Directory Contract
@@ -250,14 +253,19 @@ python _test_eval_style.py
 当前任务顺序：
 
 ```powershell
-# 1. 检查/修复训练环境中的 torch CUDA build
-# 按 requirements-train.txt 的安装顺序，先装 torch cu130 wheel，再装其它训练依赖。
-
-# 2. 最小平台验证
+# 已完成：检查/修复训练环境中的 torch CUDA build
+# 已完成：最小平台验证
 python _test_unsloth_forward.py
 
-# 3. 8B 显存边界验证
-python _test_unsloth_forward.py --model Qwen/Qwen3-8B-Instruct
+# 已完成：8B 4-bit 推理显存边界验证
+python _test_unsloth_forward.py --model huihui-ai/Huihui-Qwen3-8B-abliterated-v2
+
+# 已完成：构造并验证小样本训练数据
+python pipeline/build_train_samples.py
+python _test_train_samples.py
+
+# 当前卡点：训练态 OOM，下一步先降低 seq_len 或样本长度后重测
+python pipeline/train_qlora.py --max-seq-length 512
 ```
 
 验收边界：
@@ -345,3 +353,4 @@ python scripts/add_frontmatter.py             # 确认后执行
 - `models/*`
 - `outputs/*`
 - `.venv-train/`
+- `unsloth_compiled_cache/`
