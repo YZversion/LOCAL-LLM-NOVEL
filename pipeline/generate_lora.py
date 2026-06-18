@@ -23,16 +23,17 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
 MODEL_ID     = "huihui-ai/Huihui-Qwen3-8B-abliterated-v2"
-ADAPTER_PATH = "outputs/qlora_run"
+ADAPTER_PATH = "outputs/qlora_run_v2"    # v2 adapter (warmup_steps=1 fixed)
 PROMPT_PATH  = "outputs/debug/last_prompt.txt"
-OUTPUT_PATH  = "outputs/lora_candidate.txt"
+OUTPUT_PATH  = "outputs/lora_candidate_v2.txt"
 
 # 与 config.yaml generation 段对齐
 TEMPERATURE        = 0.8
 TOP_P              = 0.8
 TOP_K              = 20
 REPETITION_PENALTY = 1.15
-MAX_NEW_TOKENS     = 600   # config.yaml output_tokens: 600
+MAX_NEW_TOKENS     = 2500  # ~2226c target; last_prompt is ~3500 tokens so need 8192 window
+MAX_SEQ_LENGTH_INFER = 8192  # inference: must hold ~3500 input + ~2000 output tokens
 
 
 def parse_prompt_file(path: Path) -> tuple[str, str]:
@@ -84,10 +85,11 @@ def main() -> int:
     print(f"  user:   {len(user_content)}c")
 
     print(f"\n--- Loading model + adapter from {adapter_path}/ ---")
+    print(f"  max_seq_length={MAX_SEQ_LENGTH_INFER}  (inference window: input ~3500t + output ~2000t)")
     print("  (Unsloth reads base_model_name_or_path from adapter_config.json)")
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=str(adapter_path),
-        max_seq_length=1024,
+        max_seq_length=MAX_SEQ_LENGTH_INFER,
         load_in_4bit=True,
         dtype=None,
     )
@@ -148,7 +150,7 @@ def main() -> int:
     print(f"\n--- Saved to {out_path} ---")
     print()
     print("Next step:")
-    print("  python scripts/eval_draft.py --candidate outputs/lora_candidate.txt --config config.yaml")
+    print("  python scripts/eval_draft.py --candidate outputs/lora_candidate_v2.txt --config config.yaml")
     return 0
 
 
