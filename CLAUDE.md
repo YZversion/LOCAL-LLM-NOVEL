@@ -106,24 +106,37 @@ and (valid_to is None or valid_to >= max_chapter)
 [✓] 阶段3    确定性文风评测工具（2026-06-17 验收通过）
 [✓] 系统A    时序过滤数据层（2026-06-17 验收通过，45/45 测试全绿）
 [✓] 系统A数据  chapter_summaries.md ch1-58 补全（2026-06-17 完成）
-[ ] 系统B    知识图谱 + story_bible 动态写回  ← 当前焦点
-[ ] 阶段4    QLoRA 微调（系统B稳定后）
+[ ] 阶段4    QLoRA 微调  ← 当前焦点：前置验证 / 微调主线
+[ ] 系统B    知识图谱 + story_bible 动态写回（延后：微调主线跑通后再做）
 [ ] 阶段5    向量 RAG（按需）
 ```
 
-**当前焦点：系统B — 知识图谱驱动的 story_bible 动态更新。**
+**当前焦点：阶段4前置验证 / QLoRA 主线。**
 
-目标：续写第59章时 story_bible 里有完整的 ch22-58 角色信息；写完后自动更新。
+目标：先确认本机 4070 Laptop 8GB 环境能跑通 Unsloth QLoRA，并用小样本验证微调后文风指标能超过阶段3零微调基线 `style_score 50.92`。
+
+关键边界：QLoRA 负责文风、节奏、表达习惯和大纲遵循，不负责动态记住新角色。人物记忆缺口要在 System B / story_bible 检索链路中单独验收；不要把记忆缺失当成微调文风失败，也不要把文风失败归因给记忆系统。
 
 当前项目体检（2026-06-17）：
 - `chapter_summaries.md` 已覆盖 1-58 章。
 - `generated/characters/` 当前有 21 个单人物文件。
 - 当前可检索 `.md` 已检查具备 `revealed_in` / `valid_from` / `valid_to`。
 - `data/story_bible/kg.json` 尚不存在；`scripts/kg_extract.py`、`scripts/kg_update.py`、`scripts/kg_render.py`、`scripts/update_kg.py` 尚未创建。
+- 阶段4当前卡点是 `.venv-train/` torch CPU 降级；修复后先跑 Unsloth forward 和 8B 显存边界测试。
+
+阶段4当前任务清单：
+- [ ] 检查 `.venv-train/` 中 torch 是否为 CUDA build
+- [ ] 若仍是 CPU build，按 `requirements-train.txt` 顺序重装 `torch==2.10.0` cu130 wheel
+- [ ] 跑 `_test_unsloth_forward.py`（小模型）确认 CUDA + Unsloth 可用
+- [ ] 跑 `_test_unsloth_forward.py --model Qwen/Qwen3-8B-Instruct` 确认 8B 显存峰值 < 8GB
+- [ ] 构造遵守 `target_chapter=N -> max_chapter=N-1` 的小规模训练样本
+- [ ] 小样本 QLoRA 试训，并用阶段3基线验证 `style_score > 50.92`
 
 ---
 
-## 系统B 设计（知识图谱）
+## 系统B 设计（知识图谱，延后）
+
+System B 是记忆闭环，不是当前主线。它在微调主线确认能跑通、能提升文风之后再做；在此之前只保留设计和边界，不开 `kg.json` 全套实现。
 
 详见 `architecture.md`。核心链路：
 
@@ -142,7 +155,7 @@ and (valid_to is None or valid_to >= max_chapter)
 
 数据文件：`data/story_bible/kg.json`（gitignore，不入库）
 
-系统B 当前任务清单：
+System B 后续任务清单（延后）：
 - [x] 修复 `build_story_bible.py` / `split_characters.py` 的完整 frontmatter 生成，避免重跑后让卡片不可见
 - [ ] `scripts/kg_extract.py` — LLM 从章节文本抽取实体和关系
 - [ ] `scripts/kg_update.py` — 合并新实体进 kg.json，处理冲突与状态时间线
@@ -153,16 +166,19 @@ and (valid_to is None or valid_to >= max_chapter)
 
 ---
 
-## 阶段4前置测试清单（暂缓，系统B完成后恢复）
+## 阶段4前置测试清单（当前）
 
 - [x] 确认当前运行依赖安装正常：`python _test_eval_style.py`（2026-06-17 通过）
 - [x] 确认阶段3评测 wrapper 可作为训练前基线工具（2026-06-17 通过；style_score 50.92/100）
 - [x] 确认训练依赖方案：`requirements-train.txt` 已创建，`.venv-train/` 隔离
 - [x] `scripts/add_frontmatter.py` 运行完毕，29 个文件已补 frontmatter（2026-06-17）
 - [x] `python _test_temporal_filter.py` 45/45 全绿（2026-06-17）
-- [ ] 修复 `.venv-train/` torch CPU 降级（`pip install torch==2.10.0 ... --index-url https://download.pytorch.org/whl/cu130`）
-- [ ] 跑 `_test_unsloth_forward.py`（Qwen2.5-0.5B）确认 CUDA + Unsloth 可用
-- [ ] 跑 `_test_unsloth_forward.py --model Qwen/Qwen3-8B-Instruct` 确认显存峰值 < 8GB
+- [x] 修复 `.venv-train/` torch CPU 降级（2026-06-18 通过：torch CUDA build 已可用）
+- [x] 跑 `_test_unsloth_forward.py`（Qwen2.5-0.5B）确认 CUDA + Unsloth 可用（2026-06-18 通过，8B 测试隐含验证）
+- [x] 跑 `_test_unsloth_forward.py --model huihui-ai/Huihui-Qwen3-8B-abliterated-v2` 确认显存峰值 < 8GB（2026-06-18 通过；实测 peak 5.80 GB，reserved 5.91 GB，余量 2.2 GB）
+- [x] 构造小样本训练数据（2026-06-18 通过；20条，ch2-21，_test_train_samples.py 20/20 全绿）
+- [ ] 修复训练态 OOM：max_seq_length=2048 在 4-bit+LoRA r=16 下 peak 7.44GB，fused CE OOM（0.56GB 不足）
+      建议方案：max_seq_length 降至 512，或重建样本 context-chars=300 / completion-chars=200
 - [ ] 确认导出 GGUF 与 Ollama 加载流程的最小验证路径
 - [ ] 确认微调模型 style_score > 50.92
 
@@ -215,5 +231,5 @@ and (valid_to is None or valid_to >= max_chapter)
 - ...
 
 **当前阶段通关状态**
-系统B 当前 task：...，验收状态：通过/未通过
+阶段4前置验证 当前 task：...，验收状态：通过/未通过
 ```

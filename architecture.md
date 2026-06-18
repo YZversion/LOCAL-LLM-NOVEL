@@ -235,6 +235,37 @@ JSON 顶层字段（稳定）：`meta` / `inputs` / `reference_stats` / `candida
 python _test_eval_style.py
 ```
 
+## Stage 4 QLoRA（当前优先级）
+
+阶段4当前目标不是立刻全量训练，而是先暴露微调主线的最大风险：本机 `.venv-train/`、CUDA、Unsloth、8B 显存和小样本文风提升是否成立。
+
+当前基线：
+
+- 训练依赖放在 `requirements-train.txt`，安装到 `.venv-train/`，不污染主运行环境。
+- 阶段3零微调基线为 `style_score 50.92`。
+- 训练样本必须遵守章节时序口径：目标第 N 章时，输入最多只能使用 `max_chapter=N-1` 的设定和摘要。
+- **实测 VRAM（2026-06-18）推理前向**：`huihui-ai/Huihui-Qwen3-8B-abliterated-v2` 4-bit，peak 5.80 GB，reserved 5.91 GB（无 FA2，Windows，sm_89）。
+- **实测 VRAM（2026-06-18）训练态**：4-bit + LoRA r=16 + max_seq_length=2048 + batch=1 + gc=unsloth → **OOM** (fused cross entropy)。LoRA wrap 后 reserved 5.94 GB，forward pass 峰值 7.32 GB / reserved 7.44 GB，剩余 0.56 GB 不足以运行 vocab=152064 的 fused CE。需将 max_seq_length 降至 512 或减小样本长度后重测。
+
+当前任务顺序：
+
+```powershell
+# 1. 检查/修复训练环境中的 torch CUDA build
+# 按 requirements-train.txt 的安装顺序，先装 torch cu130 wheel，再装其它训练依赖。
+
+# 2. 最小平台验证
+python _test_unsloth_forward.py
+
+# 3. 8B 显存边界验证
+python _test_unsloth_forward.py --model Qwen/Qwen3-8B-Instruct
+```
+
+验收边界：
+
+- QLoRA 负责文风、节奏、表达习惯和大纲遵循。
+- QLoRA 不负责动态记住新角色；记忆缺口由 `story_bible` / System B 单独验收。
+- 微调评估时，不把人物记忆缺失当作文风微调失败；也不把文风指标失败归因给记忆系统。
+
 ## Story Bible Build
 
 ```powershell
@@ -265,15 +296,15 @@ python scripts/add_frontmatter.py             # 确认后执行
 4. 同时用 `rg` 或 Python fallback 在 `config["paths"]["raw_data"]` 下搜索原文命中段落（不受 `max_chapter` 约束）。
 5. 另外从 `chapter_summaries.md` 中解析章节摘要，按 `chapter_number <= max_chapter` 过滤，返回前情提要文本。
 
-## System B Memory（计划中）
+## System B Memory（延后）
 
-系统B是下一阶段焦点：用知识图谱驱动 `story_bible` 动态写回，而不是靠微调“记住”新事实。
+系统B是记忆闭环：用知识图谱或结构化写回驱动 `story_bible` 动态更新，而不是靠微调“记住”新事实。当前不作为主线推进；等阶段4微调链路确认能跑通、能提升文风后，再决定是否实现完整 `kg.json` 方案，或退回更轻的 BM25 + 结构化卡片方案。
 
 当前状态：
 
 - `data/story_bible/kg.json` 尚不存在。
 - `scripts/kg_extract.py`、`scripts/kg_update.py`、`scripts/kg_render.py`、`scripts/update_kg.py` 尚未创建。
-- 目标是先补齐 ch22-58 缺失角色，再支持写完第 N 章后把新增事实写回，并在第 N+1 章可检索。
+- 后续目标是补齐 ch22-58 缺失角色，再支持写完第 N 章后把新增事实写回，并在第 N+1 章可检索。
 
 计划链路：
 
