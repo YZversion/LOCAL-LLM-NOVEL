@@ -162,6 +162,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description='Validate train_samples.jsonl')
     parser.add_argument('--config', default='config.yaml')
     parser.add_argument('--samples', default='data/processed/train_samples.jsonl')
+    parser.add_argument('--raw-file', default=None,
+                        help='Path to raw novel .txt (overrides auto-detection; '
+                             'required when multiple .txt files exist in raw_data)')
     parser.add_argument('--snapshot-every', type=int, default=5,
                         help='Print human-readable snapshot every N samples (default: 5)')
     args = parser.parse_args()
@@ -180,13 +183,25 @@ def main() -> int:
 
     # Load raw novel
     raw_dir = Path(cfg['paths']['raw_data'])
-    txts = sorted(raw_dir.glob('*.txt'))
-    if not txts:
-        print(f'ERROR: no .txt in {raw_dir}', file=sys.stderr)
-        return 1
-    raw_text = txts[0].read_text(encoding='utf-8')
+    if args.raw_file:
+        raw_path = Path(args.raw_file)
+        if not raw_path.exists():
+            print(f'ERROR: --raw-file not found: {raw_path}', file=sys.stderr)
+            return 1
+        raw_text = raw_path.read_text(encoding='utf-8')
+        print(f'Loaded chapters from {raw_path.name} (--raw-file)')
+    else:
+        txts = sorted(raw_dir.glob('*.txt'))
+        if not txts:
+            print(f'ERROR: no .txt in {raw_dir}', file=sys.stderr)
+            return 1
+        if len(txts) > 1:
+            print(f'WARNING: {len(txts)} .txt files in {raw_dir}; using {txts[0].name}. '
+                  f'Use --raw-file to specify explicitly.', file=sys.stderr)
+        raw_text = txts[0].read_text(encoding='utf-8')
+        print(f'Loaded chapters from {txts[0].name}')
     chapters = parse_chapters(raw_text)
-    print(f'Loaded {len(chapters)} chapters from {txts[0].name}')
+    print(f'  {len(chapters)} chapters parsed')
 
     bible_dir = Path(cfg['paths']['story_bible'])
 

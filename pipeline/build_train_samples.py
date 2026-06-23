@@ -176,6 +176,9 @@ def main() -> int:
                              '(default: 400, same as retriever default; use 50 for 1024-token budget)')
     parser.add_argument('--output', default='data/processed/train_samples.jsonl',
                         help='Output JSONL path')
+    parser.add_argument('--raw-file', default=None,
+                        help='Path to raw novel .txt (overrides auto-detection from raw_data dir; '
+                             'required when multiple .txt files exist in raw_data)')
     args = parser.parse_args()
 
     cfg_path = Path(args.config)
@@ -192,14 +195,26 @@ def main() -> int:
 
     # Load raw novel text
     raw_dir = Path(cfg['paths']['raw_data'])
-    txts = sorted(raw_dir.glob('*.txt'))
-    if not txts:
-        print(f'ERROR: no .txt files found in {raw_dir}', file=sys.stderr)
-        return 1
-    raw_text = txts[0].read_text(encoding='utf-8')
+    if args.raw_file:
+        raw_path = Path(args.raw_file)
+        if not raw_path.exists():
+            print(f'ERROR: --raw-file not found: {raw_path}', file=sys.stderr)
+            return 1
+        raw_text = raw_path.read_text(encoding='utf-8')
+        source_name = raw_path.name
+    else:
+        txts = sorted(raw_dir.glob('*.txt'))
+        if not txts:
+            print(f'ERROR: no .txt files found in {raw_dir}', file=sys.stderr)
+            return 1
+        if len(txts) > 1:
+            print(f'WARNING: {len(txts)} .txt files in {raw_dir}; using {txts[0].name}. '
+                  f'Use --raw-file to specify explicitly.', file=sys.stderr)
+        raw_text = txts[0].read_text(encoding='utf-8')
+        source_name = txts[0].name
     chapters = parse_chapters(raw_text)
     total_ch = len(chapters)
-    print(f'Parsed {total_ch} chapters from {txts[0].name}')
+    print(f'Parsed {total_ch} chapters from {source_name}')
 
     if hi > total_ch:
         print(f'WARNING: hi={hi} exceeds total chapters={total_ch}, clamping to {total_ch}')
@@ -245,7 +260,7 @@ def main() -> int:
     meta = {
         'total_samples': len(samples),
         'chapter_range': f'{lo}-{hi}',
-        'source_file': txts[0].name,
+        'source_file': source_name,
         'context_chars': args.context_chars,
         'completion_chars': args.completion_chars,
         'bible_top_k': args.bible_top_k,

@@ -1,6 +1,6 @@
 # 项目当前状态
 
-_最后更新：2026-06-22_
+_最后更新：2026-06-23_
 
 ---
 
@@ -32,7 +32,8 @@ _最后更新：2026-06-22_
 [✓] 系统A    时序过滤数据层（2026-06-17，45/45 测试全绿）
 [✓] 系统A数据  chapter_summaries.md ch1-58 补全（2026-06-17）
 [✓] 阶段4    小样本 QLoRA 验证链路（v2：style_score 60.48 > 基线 50.92）
-[!] 阶段4    扩样 QLoRA v3 评测未通过，正在定位训练/保存/生成稳定性问题
+[✗] 阶段4    v3（novel2 合并 544 条）放弃，角色错乱+分布不兼容，不再追究根因
+[→] 阶段4    v4 准备中：57 条风丝引样本（ch2-58，700c context）待训练
 [ ] 系统B    知识图谱 + story_bible 动态写回（延后）
 [ ] 阶段5    向量 RAG（按需）
 ```
@@ -47,33 +48,41 @@ _最后更新：2026-06-22_
 - LoRA v2：第一本 20 条样本，5 optimizer steps，style_score `60.48`，repetition_risk `medium`，contamination_risk `low`。
 - v2 验收结论：小样本 LoRA 方法有效，主要改善来自 repetition_penalty。
 
-### 扩样数据
+### v3（已放弃）
 
-- novel2 已转 UTF-8：`data/raw/novel2_raw.txt`。
-- novel2 结构：主线 418 条样本、番外 21 条、卷四 85 条，共 524 条。
-- novel2 标签：`explicit_sensitive=290`、`mature_nonexplicit=156`、`general=78`。
-- 合并数据集：`data/processed/merged_train_samples.jsonl`，共 544 条。
-- 合并验证：novel1 20 条 `messages/completion` 与原始 `train_samples.jsonl` 逐条字段级一致。
+- v3 adapter：`outputs/qlora_run_v3/`（保留备档，不删除）。
+- v3 训练：novel2 合并 544 条，1 epoch，136 optimizer steps，`warmup_steps=7`，`max_seq_length=1024`。
+- v3 首次评测：style_score `46.05`（低于 v2 和基线）；后续 round2/3 生成严重崩溃（角色错乱+混入技术术语）。
+- **放弃决策**：novel2 内容分布与风丝引不兼容，根因不再追究，合并数据线彻底放弃。
 
-### v3 训练与评测
+### v4 准备中（当前主线）
 
-- v3 adapter：`outputs/qlora_run_v3/`。
-- v3 训练：544 条，1 epoch，136 optimizer steps，`warmup_steps=7`，`max_seq_length=1024`。
-- v3 显存：forward/backward peak 约 `6.82GB`，与 v2 单步显存同量级。
-- v3 首次评测：style_score `46.05`，低于 v2 `60.48` 和基线 `50.92`；repetition_risk `medium`，contamination_risk `low`。
-- 主要退化：平均句长 `83.39`，最长句 `471`，标点密度明显低于 v2。
+**训练数据**：
+- 数据集：`data/processed/train_samples_full_57.jsonl`，57 条，ch2-58，纯风丝引原文。
+- 新增角色卡：`宁楚珣`（revealed_in=42）、`大理相`（revealed_in=52），时序验证全部通过。
+- 样本参数：`context_chars=700`，`completion_chars=200`，`bible_top_k=2`，`bible_max_chars=250`，`prior_max_chars=120`。
+- Token 分布（实测）：min=1335t，max=1460t，mean=1398t，**0 条超过 1536t**。
 
-### 已排除的假设
+**训练参数**（已更新到 `pipeline/train_qlora.py`）：
 
-- 471 字最长句不是 `pipeline/eval_style.py` 分句错误；候选文本本身缺少正常标点。
-- 训练 completion 按 `content_sensitivity` 分组后，explicit_sensitive 标点密度只比其他组低约 4%-8%，不足以解释 v3 生成端 66%-86% 的标点密度退化。
-- 当前不能把 v3 失败简单归因为 novel2 explicit_sensitive 占比。
+| 参数 | 值 | 说明 |
+|------|----|----|
+| max_seq_length | **1536** | 1536 显存探针通过（峰值 6.73GB）|
+| context_chars（样本） | **700** | 推理场景 2000c 的 35%（v2 时为 60c = 3%）|
+| batch_size | 1 | 不变 |
+| grad_accum | 4 | 不变 |
+| steps/epoch | ~14 | floor(57/4) |
+| num_train_epochs | **3**（TBD） | 建议值，42 steps 总量，待确认 |
+| warmup_steps | **2**（TBD） | 建议值，~5% of 42 steps，待确认 |
+| output_dir | `outputs/qlora_run_v4/` | |
 
-### 当前卡点
+**显存状态**：
+- 1536 探针（旧 60c 数据，序列最长 942t）：峰值 6.73GB ✅
+- 新 700c 数据（序列最长 1460t）：估算峰值 ~7.3GB，建议在 full-run 前再跑一次探针确认。
 
-- 需要用同一个 v3 adapter 重复生成 2 次，判断标点退化是否稳定重现。
-- `outputs/lora_candidate_v3_repeat1.txt` 已生成（约 3336c），repeat2 尚未完成。
-- 在重复生成诊断完成前，不应直接修改 checkpoint 保存逻辑或重新训练。
+### 已知限制
+
+- `generated/characters/` 下的角色卡（如大理相）在与 2 个以上根目录主角卡同时竞争 top-k 时会被系统性排出（`_stem_priority` 机制）。大理相 ch53-55 三条样本受影响（BM25 分数排名第 1 但仍被截断），已接受现状不处理。详见 `CLAUDE.md`。
 
 ---
 
@@ -100,8 +109,8 @@ and (valid_to is None or valid_to >= max_chapter)
 当前数据状态：
 
 - `chapter_summaries.md` 覆盖 1-58 章。
-- `generated/characters/` 有 21 个单人物文件，均含完整 frontmatter。
-- `data/story_bible/` 可检索文件已补齐 frontmatter。
+- `generated/characters/` 有 23 个单人物文件（含新增 宁楚珣、大理相），均含完整 frontmatter。
+- `data/story_bible/` 可检索文件已补齐 frontmatter，共 31 个 BM25 索引文档。
 
 ---
 
@@ -115,7 +124,8 @@ and (valid_to is None or valid_to >= max_chapter)
 
 待实现脚本：`kg_extract.py` / `kg_update.py` / `kg_render.py` / `update_kg.py`
 
-待补充角色（ch22-58）：宁楚珣、洛老太太、大理相、洛安、老太监、余挚
+已补充角色（手写卡）：宁楚珣（ch42）、大理相（ch52）。
+接受 bible=[] 的角色（出场 1 章、影响有限）：洛老太太、洛安、老太监、余挚。
 
 详细设计见 `architecture.md`。
 

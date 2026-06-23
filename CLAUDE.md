@@ -1,6 +1,6 @@
 # 本地小说续写助手 — Agent 工作规程
 
-_最后更新：2026-06-22_
+_最后更新：2026-06-23_
 
 > 每次新对话开始时，先读此文件，再读 `docs/current_state.md`，再动手。
 
@@ -20,32 +20,44 @@ _最后更新：2026-06-22_
 
 详细环境/实验记录见 `docs/phase4_qlora.md`，项目全局状态见 `docs/current_state.md`。
 
-**当前唯一任务：定位 v3 扩样训练失败原因，再决定是否修 checkpoint 保存逻辑。**
+**当前任务：确认 num_train_epochs 和 warmup_steps，然后用 57 条风丝引样本训练 v4 adapter。**
 
-已确认结果：
-- 零微调基线：style_score 50.92，repetition_risk high，contamination_risk low。
-- LoRA v2（第一本 20 条，5 optimizer steps）：style_score 60.48，repetition_risk medium，contamination_risk low，阶段4小样本链路验收通过。
-- novel2 已切分/打标：524 条，`main=418 / extras=21 / vol4=85`；`explicit_sensitive=290 / mature_nonexplicit=156 / general=78`。
-- 合并数据集已生成：`data/processed/merged_train_samples.jsonl`，共 544 条，novel1 20 + novel2 524；novel1 原始 20 条逐条字段级比对通过。
-- LoRA v3（544 条，1 epoch，136 steps，warmup_steps=7）：训练完成，adapter 在 `outputs/qlora_run_v3/`；forward/backward peak 约 6.82GB。
-- v3 首次评测失败：style_score 46.05，低于 v2 60.48 和基线 50.92；repetition_risk 仍为 medium 且重复率 0.0%，contamination_risk low。
+已确认决策（v3 方向已放弃）：
+- v3（novel2 合并 544 条）放弃：round2/3 严重崩溃（角色错乱 + 技术术语），根因为 novel2 分布与风丝引不兼容，不再追究。
+- 新方向：只用风丝引自身数据，从 20 条（ch2-21）扩充至 57 条（ch2-58）。
+- 补写两张新角色卡：宁楚珣（revealed_in=42）、大理相（revealed_in=52），时序验证全部通过。
 
-已完成诊断：
-- v3 主要扣分来自 `sentence_profile`：average_sentence_length 83.39，longest_sentence_length 471。
-- 471 字长句不是 `eval_style.py` 分句漏切，候选文本本身缺少正常标点。
-- 训练 completion 的标点密度按 `content_sensitivity` 分组差距很小：explicit_sensitive 句末标点约 3.05/100字，general 约 3.18/100字，mature_nonexplicit 约 3.22/100字；不足以解释 v3 生成端 66%-86% 的标点密度退化。
-- 因此 explicit_sensitive 内容占比不是当前主要解释，问题范围收窄到训练/保存/生成稳定性。
+当前训练数据（v4）：
+- 57 条，`data/processed/train_samples_full_57.jsonl`（ch2-58 风丝引原文）。
+- 参数：`context_chars=700`，`completion_chars=200`，`bible_top_k=2`，`bible_max_chars=250`，`prior_max_chars=120`。
+- Token 分布：min=1335t，max=1460t，mean=1398t，0 条超过 1536t 上限。
+- `_test_train_samples.py`：57/57 ALL PASS（含宁楚珣 ch42/ch43 边界、大理相 ch52 边界）。
 
 当前卡点：
-- 正在用同一个 v3 adapter 做重复生成诊断，确认标点退化是 adapter 稳定特征还是单次采样异常。
-- `outputs/lora_candidate_v3_repeat1.txt` 已生成（约 3336c），尚需统计并生成第二份 repeat 候选后再下结论。
-- 不要在重复生成诊断完成前直接修改 checkpoint 保存逻辑或重新训练。
+- `pipeline/train_qlora.py` 已更新：`MAX_SEQ_LENGTH=1536`，`--samples` 默认指向 `train_samples_full_57.jsonl`，`--full-run` 输出目录为 `outputs/qlora_run_v4/`。
+- `WARMUP_STEPS=2`，`NUM_TRAIN_EPOCHS=3` 为建议值（TBD），等用户确认后开始训练。
+- 建议在 full-run 前用新 57 条 700c 样本再跑一次 1536 显存探针（当前探针用的是旧 60c 数据，实际序列最长 942t；新数据最长 1460t，VRAM 会略高，估算 ~7.3GB）。
+
+## 已知限制 / 设计权衡
+
+**`_stem_priority()` 机制对 generated/characters/ 卡片的系统性排出**
+
+`cowriter/retriever.py` 的 `_stem_priority()` 给根目录卡片赋 priority=0、给 `generated/` 子目录卡片赋 priority=1。当多个实体在同一查询上下文中被精确匹配，精确匹配按 priority 排序后填满 top-k，priority=1 的 generated/ 卡片在与 2 个以上根目录主角卡同时竞争时会被系统性截断出局，与 BM25 相关性分数无关。
+
+已用大理相案例验证：ch53 查询中大理相 BM25 分数 50.46（排名第 1），但因叶欢（priority=0）+ 洛诗（priority=0）占满 top-k=2 两个 slot，大理相（priority=1）被截断。当前受影响：大理相卡片在 ch53-55 三条训练样本里无法被召回。
+
+这是 `_stem_priority` 设计的权衡副作用（手写卡 > 自动生成卡），不是 bug。当前阶段接受现状，不处理。
+
+若未来需要修复，三个方向：
+- ① 把 generated/ 卡片移到根目录（破坏目录语义）
+- ② 提高 bible_top_k（增加 token 预算压力，当前 1536 预算已较紧）
+- ③ 修改 `_stem_priority` 让两类卡片平权（影响所有 generated/ 卡片的全局检索行为，需评估）
 
 ---
 
 ## 禁止修改的文件（非明确任务不碰）
 
-`cowriter/session.py` · `cowriter/prompts.py` · `cowriter/retriever.py` · `cowriter/web.py` · `cowriter/chapter.py` · `config.yaml` · `data/raw/` · `data/story_bible/` · `pipeline/eval_style.py`
+`cowriter/session.py` · `cowriter/prompts.py` · `cowriter/retriever.py` · `cowriter/web.py` · `cowriter/chapter.py` · `config.yaml` · `data/raw/` · `data/story_bible/` · `pipeline/eval_style.py` · `data/processed/merged_train_samples.jsonl`（novel2 544 条，已放弃，保留备档）
 
 ---
 

@@ -50,11 +50,11 @@ LORA_TARGETS = [        # Unsloth: standard Qwen/Llama target modules
     "q_proj", "k_proj", "v_proj", "o_proj",
     "gate_proj", "up_proj", "down_proj",
 ]
-MAX_SEQ_LENGTH = 1024   # 8GB 显存预算下的已验证训练长度；2048 在 fused CE 阶段 OOM
+MAX_SEQ_LENGTH = 1536   # 1536 显存探针通过（6.73GB峰值）；2048 在 fused CE 阶段 OOM
 LEARNING_RATE = 2e-4    # Unsloth README standard starter
 GRAD_ACCUM = 4          # Unsloth README default (effective batch = 4)
-WARMUP_STEPS = 7        # 544 samples / batch1 / grad_accum4 = 136 steps; 7 ~= 5% warmup
-NUM_TRAIN_EPOCHS = 1
+WARMUP_STEPS = 2        # TBD: pending user confirmation (proposal: 2 = ~5% of 42 total steps @ 3 epochs)
+NUM_TRAIN_EPOCHS = 3    # TBD: pending user confirmation (proposal: 3 epochs = 42 optimizer steps)
 RANDOM_STATE = 3407     # Unsloth notebook default
 
 
@@ -181,7 +181,7 @@ def run(args) -> int:
     if args.output_dir:
         output_dir = args.output_dir
     else:
-        output_dir = "outputs/qlora_vram_test" if not args.full_run else "outputs/qlora_run_v3"
+        output_dir = "outputs/qlora_vram_test" if not args.full_run else "outputs/qlora_run_v4"
 
     trainer = SFTTrainer(
         model=model,
@@ -298,7 +298,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--samples",
-        default="data/processed/merged_train_samples.jsonl",
+        default="data/processed/train_samples_full_57.jsonl",
         help="Path to JSONL training samples",
     )
     parser.add_argument(
