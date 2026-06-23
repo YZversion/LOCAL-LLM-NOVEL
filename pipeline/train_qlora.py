@@ -113,6 +113,10 @@ def print_vram(label: str):
 
 
 def run(args) -> int:
+    # Must be set before unsloth_zoo is imported — TARGET_GB is read at module init time
+    import os as _os
+    _os.environ["UNSLOTH_CE_LOSS_TARGET_GB"] = "0.5"
+
     import torch
     from unsloth import FastLanguageModel
     try:
@@ -161,6 +165,7 @@ def run(args) -> int:
         use_rslora=False,
         loftq_config=None,
     )
+    model.gradient_checkpointing_enable()   # 强制启用，与 unsloth 参数叠加
     print_vram("after LoRA wrap")
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
@@ -265,7 +270,7 @@ def run(args) -> int:
     print(f"batch_size     : 1")
     print(f"gc             : gradient_checkpointing=unsloth")
     print(f"bf16           : {torch.cuda.is_bf16_supported()}")
-    print(f"Steps run      : {max_steps if max_steps > 0 else 'full epoch (1 epoch)'}")
+    print(f"Steps run      : {max_steps if max_steps > 0 else f'full run ({NUM_TRAIN_EPOCHS} epochs)'}")
     print(f"max_seq_length : {args.max_seq_length}")
     print(f"Peak VRAM alloc: {peak_gb:.2f} GB  (target < 8.0 GB)")
     print(f"VRAM reserved  : {rsv_gb:.2f} GB")

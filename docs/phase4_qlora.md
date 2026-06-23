@@ -42,7 +42,7 @@ _最后更新：2026-06-23_
 | v1 | novel1 20 条 | 2048 | 1000 | 1 | 5 | 5 | `outputs/qlora_run/` | 归档（warmup bug） |
 | v2 | novel1 20 条 | 1024 | 60 | 1 | 5 | 1 | `outputs/qlora_run_v2/` | 已通过 ✅ |
 | v3 | merged 544 条 | 1024 | 60/1000* | 1 | 136 | 7 | `outputs/qlora_run_v3/` | 放弃 ✗ |
-| v4 | 风丝引 57 条 | **1536** | **700** | **3**（TBD） | **~42**（TBD） | **2**（TBD） | `outputs/qlora_run_v4/` | 待训练 🔜 |
+| v4 | 风丝引 57 条 | **1536** | **700** | **3** | **45** | **2** | `outputs/qlora_run_v4/` | 已训练 ✅ |
 
 *v3 数据：novel1 用 context_chars=60，novel2 用 context_chars=1000（两种口径混入，是 v3 放弃原因之一）。
 
@@ -50,7 +50,7 @@ _最后更新：2026-06-23_
 - v1 的 `warmup_steps=5` 等于总步数，LR 从未达到峰值。
 - v2 的 `warmup_steps=1` 是针对 5 步小样本实验的特例。
 - v3 样本数扩大到 544 后，按总步数约 5% 设置 `warmup_steps=7`，但 novel2 数据分布与风丝引不兼容，根本方向错误。
-- v4 的 warmup_steps=2（5% of 42 总步数）、num_train_epochs=3 为建议值，待用户确认后写入训练脚本。
+- v4 实际总步数 45（ceil(57/4)=15 steps/epoch × 3 epochs），warmup_steps=2 占 4.4%。
 
 ---
 
@@ -62,7 +62,9 @@ _最后更新：2026-06-23_
 | 训练 v1（OOM） | 2048 | ~1500t | peak 7.44 GB，fused CE OOM | warmup bug 同时存在 |
 | 训练 v2（通过） | 1024 | ~880t avg | peak 约 6.74 GB | 20 条样本，5 steps，context=60c |
 | 训练 v3（通过） | 1024 | ~900t avg | peak 约 6.82 GB | 544 条样本，136 steps，context=60c/1000c |
-| **1536 探针（通过）** | **1536** | **~876t avg**（旧 60c 样本） | **peak 6.73 GB** | 57 条，3 steps，padding-free 自动启用 |
+| **1536 探针（通过）** | **1536** | ~876t avg（旧 60c 样本） | peak 6.73 GB | 57 条，3 steps，padding-free 自动启用 |
+| **v4 显存探针（通过）** | **1536** | **max 1460t**（新 700c 样本） | **peak 7.38 GB** | 57 条，3 steps，UNSLOTH_CE_LOSS_TARGET_GB=0.5 |
+| **v4 full-run（通过）** | **1536** | max 1460t | **peak 7.38 GB** | 57 条，45 steps（3 epochs），adapter 已保存 |
 
 结论：
 - 样本数增加主要影响训练时长，不显著改变单步显存峰值（Unsloth padding-free 按实际 token 数计算 VRAM）。
@@ -110,6 +112,7 @@ context_chars 历史对比：
 | v1 | `outputs/qlora_run/` | 归档 | warmup bug，loss 3.593 |
 | v2 | `outputs/qlora_run_v2/` | 已通过 | 20 条小样本，style_score 60.48 |
 | v3 | `outputs/qlora_run_v3/` | 未通过 | 544 条扩样，style_score 46.05 |
+| v4 | `outputs/qlora_run_v4/` | 待评测 🔜 | 57 条风丝引，45 steps，train_loss≈2.69 |
 
 v2 loss：
 
@@ -119,6 +122,18 @@ step 2: loss=4.022  LR=2e-4
 step 3: loss=3.757  LR=1.5e-4
 step 4: loss=3.530  LR=1e-4
 step 5: loss=3.450  LR=5e-5
+```
+
+v4 loss（45 steps，3 epochs，风丝引 57 条）：
+
+```text
+epoch 1 末（step 15):  loss=2.993  epoch=1.00
+epoch 2 末（step 30):  loss=2.682  epoch=2.00
+epoch 3 末（step 45):  loss=2.223  epoch=3.00
+train_loss ≈ 2.69  （45步均值）
+
+特殊事件：step 12 grad_norm=1.774（约正常 3-4x），次步恢复正常，未影响收敛。
+VRAM fix：UNSLOTH_CE_LOSS_TARGET_GB=0.5（绕开梯度 offload 导致的 _get_chunk_multiplier 误测）。
 ```
 
 v3 loss 快照：
@@ -194,21 +209,15 @@ v3 结论：
 
 ---
 
-## 下一步（v4 训练前检查清单）
+## 下一步（v4 评测）
 
-1. **用户确认超参**：`num_train_epochs=3`，`warmup_steps=2`（已写入 `pipeline/train_qlora.py`，标注 TBD）。
-2. **v4 VRAM 探针**：用 `train_samples_full_57.jsonl`（最长 1460t）再跑一次 3-step 探针，预期峰值 ~7.3GB < 8GB。
+1. ✅ 确认超参：`num_train_epochs=3`，`warmup_steps=2`
+2. ✅ v4 VRAM 探针（peak 7.38 GB PASS）
+3. ✅ full-run 训练（45 steps，adapter 已保存到 `outputs/qlora_run_v4/`）
+4. **后训练评测**（当前任务）：
    ```powershell
-   .venv-train\Scripts\Activate.ps1
-   python pipeline/train_qlora.py   # max_steps=3 探针
-   ```
-3. **full-run 训练**（探针通过后）：
-   ```powershell
-   python pipeline/train_qlora.py --full-run   # → outputs/qlora_run_v4/
-   ```
-4. **后训练评测**：
-   ```powershell
+   # .venv-train 激活后
    python pipeline/generate_lora_multi.py
-   python scripts/eval_draft.py --candidate <候选文件> --config config.yaml --out-json v4_eval.json
+   python scripts/eval_draft.py --candidate <生成文件> --config config.yaml --out-json v4_eval.json
    ```
 5. **验收目标**：style_score > 60.48（v2 基准）。

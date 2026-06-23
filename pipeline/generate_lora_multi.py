@@ -22,9 +22,9 @@ import yaml
 from pipeline.eval_style import norm_unit
 from pipeline.eval_style import split_paragraphs as _split_paragraphs
 
-ADAPTER_PATH        = "outputs/qlora_run_v2"
+ADAPTER_PATH        = "outputs/qlora_run_v4"
 PROMPT_PATH         = "outputs/debug/last_prompt.txt"
-OUTPUT_PATH         = "outputs/lora_candidate_v2.txt"
+OUTPUT_PATH         = "outputs/lora_candidate_v4.txt"
 CONFIG_PATH         = "config.yaml"
 MAX_SEQ_LENGTH_INFER = 8192
 MAX_NEW_TOKENS       = 800   # per round; ~600-700c Chinese per round
@@ -247,7 +247,7 @@ def main() -> int:
         print(f"  [Note] {skip_rounds} skip(s) consumed round budget without output.")
     print()
     print("Next step:")
-    print("  python scripts/eval_draft.py --candidate outputs/lora_candidate_v2.txt --config config.yaml")
+    print("  python scripts/eval_draft.py --candidate outputs/lora_candidate_v4.txt --config config.yaml")
 
     del model, tokenizer
     gc.collect()

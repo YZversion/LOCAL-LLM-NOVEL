@@ -33,7 +33,7 @@ _最后更新：2026-06-23_
 [✓] 系统A数据  chapter_summaries.md ch1-58 补全（2026-06-17）
 [✓] 阶段4    小样本 QLoRA 验证链路（v2：style_score 60.48 > 基线 50.92）
 [✗] 阶段4    v3（novel2 合并 544 条）放弃，角色错乱+分布不兼容，不再追究根因
-[→] 阶段4    v4 准备中：57 条风丝引样本（ch2-58，700c context）待训练
+[→] 阶段4    v4 训练完成（outputs/qlora_run_v4/），待评测（style_score 目标 > 60.48）
 [ ] 系统B    知识图谱 + story_bible 动态写回（延后）
 [ ] 阶段5    向量 RAG（按需）
 ```
@@ -72,13 +72,13 @@ _最后更新：2026-06-23_
 | batch_size | 1 | 不变 |
 | grad_accum | 4 | 不变 |
 | steps/epoch | ~14 | floor(57/4) |
-| num_train_epochs | **3**（TBD） | 建议值，42 steps 总量，待确认 |
-| warmup_steps | **2**（TBD） | 建议值，~5% of 42 steps，待确认 |
+| num_train_epochs | **3** | 实际 45 steps（ceil(57/4)=15 steps/epoch × 3）|
+| warmup_steps | **2** | 4.4% of 45 steps |
 | output_dir | `outputs/qlora_run_v4/` | |
 
 **显存状态**：
-- 1536 探针（旧 60c 数据，序列最长 942t）：峰值 6.73GB ✅
-- 新 700c 数据（序列最长 1460t）：估算峰值 ~7.3GB，建议在 full-run 前再跑一次探针确认。
+- v4 探针（700c 数据，序列最长 1460t）：峰值 **7.38 GB** ✅（UNSLOTH_CE_LOSS_TARGET_GB=0.5）
+- v4 full-run：峰值同探针，**7.38 GB** ✅，adapter 已保存。
 
 ### 已知限制
 
