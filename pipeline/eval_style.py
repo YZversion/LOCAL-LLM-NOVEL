@@ -362,7 +362,12 @@ def repetition_stats(candidate: str) -> dict[str, Any]:
     paragraphs = [norm_unit(p) for p in split_paragraphs(candidate) if norm_unit(p)]
     paragraph_counts = Counter(paragraphs)
     duplicate_paragraph_count = sum(count - 1 for count in paragraph_counts.values() if count > 1)
-    duplicate_paragraph_ratio = ratio(duplicate_paragraph_count, len(paragraphs))
+    # Character-weighted ratio: chars in ALL occurrences of duplicate paragraphs (originals + copies)
+    # divided by total paragraph chars. More accurately reflects content fraction lost to repetition
+    # than the old paragraph-count ratio. Threshold (0.25) retained but needs empirical re-calibration.
+    _total_para_chars = sum(len(p) for p in paragraphs)
+    _dup_para_chars = sum(len(p) * count for p, count in paragraph_counts.items() if count > 1)
+    duplicate_paragraph_ratio = ratio(_dup_para_chars, _total_para_chars)
 
     ngrams = char_ngram_stats(candidate)
     loops = short_sentence_loops(sentences)

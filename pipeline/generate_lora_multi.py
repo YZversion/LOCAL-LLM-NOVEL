@@ -19,6 +19,9 @@ sys.path.insert(0, str(ROOT))
 import gc
 import yaml
 
+from pipeline.eval_style import norm_unit
+from pipeline.eval_style import split_paragraphs as _split_paragraphs
+
 ADAPTER_PATH        = "outputs/qlora_run_v2"
 PROMPT_PATH         = "outputs/debug/last_prompt.txt"
 OUTPUT_PATH         = "outputs/lora_candidate_v2.txt"
@@ -55,6 +58,27 @@ def strip_think(text: str) -> str:
     text = re.sub(r"</think>\s*", "", text)
     text = re.sub(r"\s*/no_think\s*", "", text)
     return text.strip()
+
+
+_MIN_DEDUP_CHARS = 10  # paragraphs shorter than this are not checked for dedup
+
+
+def _dedup_truncate(new_text: str, seen_keys: set) -> tuple:
+    """Split new_text into paragraphs; return content up to (not including)
+    the first paragraph whose norm_unit key is already in seen_keys.
+    Returns (kept_text, was_truncated, was_fully_skipped)."""
+    paras = _split_paragraphs(new_text)
+    kept: list = []
+    truncated = False
+    for p in paras:
+        key = norm_unit(p)
+        if len(key) < _MIN_DEDUP_CHARS or key not in seen_keys:
+            kept.append(p)
+        else:
+            truncated = True
+            break
+    kept_text = "\n\n".join(kept).strip()
+    return kept_text, truncated, (truncated and not kept_text)
 
 
 def generate_one_round(model, tokenizer, messages: list[dict]) -> str:
@@ -139,8 +163,13 @@ def main() -> int:
     accumulated_text = context_text
     all_new_texts: list[str] = []
     total_new_chars = 0
+    seen_para_keys: set = set()
+    truncation_rounds = 0
+    skip_rounds = 0
+    rounds_attempted = 0
 
     for rnd in range(1, MAX_ROUNDS + 1):
+        rounds_attempted += 1
         print(f"\n=== Round {rnd} (new so far: {total_new_chars}c / target {TARGET_CHARS}c) ===")
 
         recent_text = accumulated_text[-MAX_RECENT_CHARS:]
@@ -179,9 +208,23 @@ def main() -> int:
             print("  [WARN] Empty generation, stopping early.")
             break
 
-        all_new_texts.append(new_text)
-        accumulated_text += "\n\n" + new_text
-        total_new_chars += len(new_text)
+        kept_text, was_truncated, was_skipped = _dedup_truncate(new_text, seen_para_keys)
+        if was_truncated:
+            truncation_rounds += 1
+            print(f"  [DEDUP] Truncated: {len(new_text)}c → {len(kept_text)}c (duplicate paragraph detected)")
+        if was_skipped:
+            skip_rounds += 1
+            print(f"  [SKIP] Entire round is duplicate — skipping.")
+            continue
+
+        text_to_add = kept_text if was_truncated else new_text
+        for p in _split_paragraphs(text_to_add):
+            key = norm_unit(p)
+            if len(key) >= _MIN_DEDUP_CHARS:
+                seen_para_keys.add(key)
+        all_new_texts.append(text_to_add)
+        accumulated_text += "\n\n" + text_to_add
+        total_new_chars += len(text_to_add)
 
         if total_new_chars >= TARGET_CHARS:
             print(f"\n  Target reached ({total_new_chars}c >= {TARGET_CHARS}c). Stopping.")
@@ -196,6 +239,12 @@ def main() -> int:
     print(f"  Rounds completed: {len(all_new_texts)}")
     print(f"  Total new text: {len(candidate)}c")
     print(f"  Saved to: {out_path}")
+    print(f"\n=== Deduplication Summary ===")
+    print(f"  Rounds attempted:   {rounds_attempted}")
+    print(f"  Truncations:        {truncation_rounds}")
+    print(f"  Full skips:         {skip_rounds}")
+    if skip_rounds > 0:
+        print(f"  [Note] {skip_rounds} skip(s) consumed round budget without output.")
     print()
     print("Next step:")
     print("  python scripts/eval_draft.py --candidate outputs/lora_candidate_v2.txt --config config.yaml")

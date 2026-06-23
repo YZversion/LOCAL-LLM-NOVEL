@@ -119,3 +119,52 @@ python scripts\eval_draft.py --config config.yaml --candidate <candidate.txt>
 ## 阶段4前置验证 — 评测基线建立（2026-06-17）
 
 `huihui_ai/qwen3-abliterated:8b-v2` 零微调基线：`style_score 50.92/100`（level: far），`repetition_risk: high`，`contamination_risk: low`。候选文本为 5 次连续续写（2226 字），参考为 `data/raw/风丝引_原文.txt`（364151 非空白字符）。无文本内容的指标文件提交至 `baselines/phase4_pre/baseline_metrics.json`。微调后模型需在同一参考文本上超过此分数。
+
+---
+
+## 阶段4 QLoRA 小样本验证与扩样诊断（2026-06-18 至 2026-06-22）
+
+### v2 小样本验证通过
+
+- 数据：第一本 20 条样本，`data/processed/train_samples.jsonl`。
+- 训练：1 epoch，5 optimizer steps，`warmup_steps=1`，`max_seq_length=1024`。
+- adapter：`outputs/qlora_run_v2/`。
+- 评测：`outputs/lora_candidate_v2.txt`，脱敏指标 `baselines/phase4_pre/lora_v2_metrics.json`。
+- 结果：style_score `60.48`，高于基线 `50.92`；repetition_risk 从 `high` 改善为 `medium`；contamination_risk 保持 `low`。
+- 结论：QLoRA 方法链路有效，下一步瓶颈转向样本规模。
+
+### novel2 数据扩充
+
+- 原始文件为 GBK/GB18030 编码，已转换为 UTF-8：`data/raw/novel2_raw.txt`。
+- 结构确认：主线、番外、卷四延续部分均保留。
+- 切分入口：`pipeline/build_novel2_labeled_samples.py`。
+- 输出：`data/processed/novel2_samples.jsonl` 与 `data/processed/novel2_labels.jsonl`。
+- 样本数：524 条。
+- source_section：main 418、extras 21、vol4 85。
+- content_sensitivity：explicit_sensitive 290、mature_nonexplicit 156、general 78。
+- 标签文件只存 ID、标签与 confidence，不存原文片段。
+
+### 合并数据集
+
+- 合并入口：`pipeline/merge_train_samples.py`。
+- 输出：`data/processed/merged_train_samples.jsonl`。
+- 总数：544 条，novel1 20 + novel2 524。
+- 统一追踪字段：`merged_sample_id`、`source_book`、`source_sample_id`、`source_section`、`source_section_confidence`、`content_sensitivity`、`content_sensitivity_confidence`。
+- 验证：novel1 20 条 `messages/completion` 与原始文件逐条字段级一致；novel2 标签无缺失、无错配。
+
+### v3 扩样训练未通过
+
+- 数据：合并数据集 544 条。
+- 训练：1 epoch，136 optimizer steps，`warmup_steps=7`，`max_seq_length=1024`。
+- adapter：`outputs/qlora_run_v3/`。
+- 显存：forward/backward peak 约 6.82GB。
+- 结果：style_score `46.05`，低于 v2 `60.48` 和基线 `50.92`。
+- repetition_risk 保持 `medium`，重复率指标继续改善；contamination_risk 保持 `low`。
+- 主要问题：sentence_profile 大幅下降，average_sentence_length `83.39`，longest_sentence_length `471`。
+
+### v3 诊断结论
+
+- 最长句异常不是 `pipeline/eval_style.py` 分句逻辑漏切；候选文本本身缺少正常标点。
+- 训练数据 completion 按 `content_sensitivity` 分组统计后，explicit_sensitive 的句末标点密度约 `3.05/100字`，general 约 `3.18/100字`，mature_nonexplicit 约 `3.22/100字`。
+- 组间差异只有 4%-8%，不足以解释 v3 生成端 66%-86% 的标点密度退化。
+- 当前未能确认 v3 失败来自训练保存时机还是生成采样偶发异常；下一步需要完成同 adapter 的重复生成诊断。

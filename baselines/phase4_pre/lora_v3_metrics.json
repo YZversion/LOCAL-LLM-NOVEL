@@ -1,0 +1,56 @@
+{
+  "meta": {
+    "tool": "eval_style.py",
+    "version": "3.6",
+    "created_at": "2026-06-22T13:37:56+08:00",
+    "adapter": "outputs/qlora_run_v3",
+    "training_samples": 544,
+    "training_steps": 136,
+    "note": "merged-data LoRA v3; multi-round generation via generate_lora_multi.py constants overridden for v3 adapter/output; text-bearing example fields removed"
+  },
+  "candidate_stats": {
+    "char_count": 2802,
+    "non_whitespace_char_count": 2752,
+    "line_count": 51,
+    "paragraph_count": 24,
+    "sentence_count": 33,
+    "average_sentence_length": 83.3939,
+    "median_sentence_length": 47.0,
+    "longest_sentence_length": 471,
+    "dialogue_line_count": 5,
+    "dialogue_line_ratio": 0.1786
+  },
+  "repetition": {
+    "duplicate_line_ratio": 0.0,
+    "duplicate_paragraph_ratio": 0.0,
+    "repetition_risk": "medium"
+  },
+  "contamination": {
+    "overlapping_sentence_ratio": 0.0,
+    "contamination_risk": "low"
+  },
+  "style_score": {
+    "overall": 46.0495,
+    "level": "far",
+    "components": {
+      "length_profile": 0.19,
+      "sentence_profile": 11.0868,
+      "paragraph_profile": 3.5294,
+      "dialogue_profile": 12.2433,
+      "repetition_penalty": 9.0,
+      "contamination_penalty": 10.0
+    }
+  },
+  "vs_baseline": {
+    "baseline_style_score": 50.9188,
+    "delta": -4.8693,
+    "baseline_repetition_risk": "high",
+    "result": "FAIL"
+  },
+  "vs_v2": {
+    "v2_style_score": 60.4768,
+    "delta": -14.4273,
+    "v2_repetition_risk": "medium",
+    "result": "FAIL"
+  }
+}

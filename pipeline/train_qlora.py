@@ -5,7 +5,7 @@
 运行环境：.venv-train/（必须先激活，不能在主 venv 里跑）
 
 用途：
-  1. VRAM 测量（默认）：用 train_samples.jsonl 跑 3 个梯度更新步，测训练态峰值显存。
+  1. VRAM 测量（默认）：用 merged_train_samples.jsonl 跑 3 个梯度更新步，测训练态峰值显存。
   2. 完整小样本训练（--full-run）：跑完全部样本 1 个 epoch，用于后续文风评测。
 
 LoRA 参数来源：
@@ -26,7 +26,7 @@ Usage:
     .venv-train\\Scripts\\Activate.ps1
     $env:HF_ENDPOINT = "https://hf-mirror.com"      # 若需镜像
     python pipeline/train_qlora.py                    # VRAM 测量（3 步）
-    python pipeline/train_qlora.py --full-run         # 完整 1 epoch
+    python pipeline/train_qlora.py --full-run         # 完整 1 epoch，保存到 outputs/qlora_run_v3/
     python pipeline/train_qlora.py --model other/model --samples other.jsonl
 """
 
@@ -50,10 +50,11 @@ LORA_TARGETS = [        # Unsloth: standard Qwen/Llama target modules
     "q_proj", "k_proj", "v_proj", "o_proj",
     "gate_proj", "up_proj", "down_proj",
 ]
-MAX_SEQ_LENGTH = 2048   # Unsloth Qwen3 notebook default; overridden by --max-seq-length
+MAX_SEQ_LENGTH = 1024   # 8GB 显存预算下的已验证训练长度；2048 在 fused CE 阶段 OOM
 LEARNING_RATE = 2e-4    # Unsloth README standard starter
 GRAD_ACCUM = 4          # Unsloth README default (effective batch = 4)
-WARMUP_STEPS = 1        # 1 step warmup；5 was equal to total steps (5) → LR never reached peak
+WARMUP_STEPS = 7        # 544 samples / batch1 / grad_accum4 = 136 steps; 7 ~= 5% warmup
+NUM_TRAIN_EPOCHS = 1
 RANDOM_STATE = 3407     # Unsloth notebook default
 
 
@@ -180,7 +181,7 @@ def run(args) -> int:
     if args.output_dir:
         output_dir = args.output_dir
     else:
-        output_dir = "outputs/qlora_vram_test" if not args.full_run else "outputs/qlora_run"
+        output_dir = "outputs/qlora_vram_test" if not args.full_run else "outputs/qlora_run_v3"
 
     trainer = SFTTrainer(
         model=model,
@@ -193,7 +194,7 @@ def run(args) -> int:
             gradient_accumulation_steps=GRAD_ACCUM,
             warmup_steps=WARMUP_STEPS,
             max_steps=max_steps,              # 3 = VRAM probe; -1 = use num_train_epochs
-            num_train_epochs=1,               # used only when max_steps=-1
+            num_train_epochs=NUM_TRAIN_EPOCHS,  # used only when max_steps=-1
             learning_rate=LEARNING_RATE,
             fp16=not torch.cuda.is_bf16_supported(),
             bf16=torch.cuda.is_bf16_supported(),
@@ -274,11 +275,11 @@ def run(args) -> int:
         print()
         print("NOTE: this was a VRAM measurement run (max_steps=3, save_strategy=no).")
         print("      No checkpoint was saved.")
-        print("      Re-run with --full-run to train for 1 full epoch and save to outputs/qlora_run/.")
+        print("      Re-run with --full-run to train for 1 full epoch and save to outputs/qlora_run_v3/.")
     else:
         print()
         print(f"NOTE: full epoch training completed. LoRA adapter saved to {output_dir}/")
-        print("      Run: python pipeline/generate_lora.py  → then eval_draft.py")
+        print("      Run the v3 evaluation step only after user confirmation.")
 
     # 清理
     del model, tokenizer
@@ -297,8 +298,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--samples",
-        default="data/processed/train_samples.jsonl",
-        help="Path to JSONL training samples (from build_train_samples.py)",
+        default="data/processed/merged_train_samples.jsonl",
+        help="Path to JSONL training samples",
     )
     parser.add_argument(
         "--full-run",
@@ -309,12 +310,12 @@ def main() -> int:
         "--max-seq-length",
         type=int,
         default=MAX_SEQ_LENGTH,
-        help=f"Max sequence length (default: {MAX_SEQ_LENGTH}). Use 1024 to test reduced budget.",
+        help=f"Max sequence length (default: {MAX_SEQ_LENGTH}).",
     )
     parser.add_argument(
         "--output-dir",
         default=None,
-        help="Override output directory for adapter save (default: outputs/qlora_vram_test or outputs/qlora_run).",
+        help="Override output directory for adapter save (default: outputs/qlora_vram_test or outputs/qlora_run_v3).",
     )
     args = parser.parse_args()
 

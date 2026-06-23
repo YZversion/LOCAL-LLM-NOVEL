@@ -1,6 +1,8 @@
 # 本地小说续写助手架构
 
-本文档记录当前小说续写项目的目录职责、运行链路、路径约定和阶段边界。当前基线是阶段3完成后、系统A时序过滤落地后的状态：Ollama + Qwen3-8B 非思考模式、补全式 prompt、story_bible 时序过滤检索、前情提要注入、输出清洗与去重。
+_最后更新：2026-06-22_
+
+本文档记录当前小说续写项目的目录职责、运行链路、路径约定和阶段边界。当前运行基线是阶段3完成后、系统A时序过滤落地后的状态：Ollama + Qwen3-8B 非思考模式、补全式 prompt、story_bible 时序过滤检索、前情提要注入、输出清洗与去重。当前训练主线处于阶段4 QLoRA 扩样诊断中：v2 小样本通过，v3 扩样训练未通过，正在定位训练/保存/生成稳定性问题。
 
 核心原则：
 
@@ -40,13 +42,18 @@ LOCAL-LLM-NOVEL/
 ├─ outputs/                    # 续写草稿输出（gitignore）
 ├─ baselines/
 │  └─ phase4_pre/
-│     └─ baseline_metrics.json # 阶段4前置评测基线（无原文，可入库）
+│     ├─ baseline_metrics.json # 阶段4前置评测基线（无原文，可入库）
+│     ├─ lora_v2_metrics.json  # v2 脱敏指标
+│     └─ lora_v3_metrics.json  # v3 脱敏指标
 ├─ pipeline/                   # 数据清洗、评估、训练、导出相关脚本
 │  ├─ prepare_data.py          # 阶段1占位：用户自有清洗脚本入口
 │  ├─ eval_style.py            # 阶段3：确定性文风评测 CLI
 │  ├─ build_train_samples.py   # 阶段4：构造遵守章节口径的 QLoRA 训练样本
+│  ├─ build_novel2_labeled_samples.py # 阶段4：novel2 切分、source_section 与 content_sensitivity 打标
+│  ├─ merge_train_samples.py   # 阶段4：合并 novel1/novel2 样本并补统一追踪字段
 │  ├─ train_qlora.py           # 阶段4：训练态显存实测与小样本 QLoRA 训练
 │  ├─ generate_lora.py         # 阶段4：用 LoRA adapter 生成候选文本供评测
+│  ├─ generate_lora_multi.py   # 阶段4：多轮 LoRA 生成，复用真实推理 prompt 链路
 │  └─ export_gguf.py           # 阶段4占位：GGUF 导出
 ├─ tests/
 │  └─ fixtures/eval_style/     # 阶段3固定假文本回归样本，不含真实小说原文
@@ -65,7 +72,11 @@ data/
 │  ├─ .gitkeep
 │  └─ <novel_source>.txt
 ├─ processed/
-│  └─ .gitkeep
+│  ├─ .gitkeep
+│  ├─ train_samples.jsonl          # novel1 20 条训练样本（gitignore）
+│  ├─ novel2_samples.jsonl         # novel2 524 条样本（gitignore）
+│  ├─ novel2_labels.jsonl          # novel2 标签；只含 ID/标签/confidence（gitignore）
+│  └─ merged_train_samples.jsonl   # novel1+novel2 合并训练集，544 条（gitignore）
 └─ story_bible/
    ├─ .gitkeep
    ├─ _merged_data.json        # build_story_bible.py 生成；当前仅作保留产物
@@ -85,8 +96,8 @@ data/
 
 目录职责：
 
-- `data/raw/`: 原始小说正文。`config.yaml` 的 `paths.raw_data` 指向这里，Retriever 的原文 grep 也从这里找。
-- `data/processed/`: 预处理后的训练数据、切片数据或清洗结果。当前代码未强依赖。
+- `data/raw/`: 原始小说正文。`config.yaml` 的 `paths.raw_data` 指向这里，Retriever 的原文 grep 也从这里找。阶段4训练素材也放在这里，但不入库。
+- `data/processed/`: 预处理后的训练数据、切片数据、标签和合并数据集。训练脚本可显式读取这里的 JSONL，但交互式续写运行时不依赖这里。
 - `data/story_bible/`: 设定集 Markdown。Retriever 会读取这里的 `*.md` 建 BM25 索引。`chapter_summaries.md` 由 `get_prior_summaries()` 直接解析并按章节号过滤；`_merged_data.json` 目前只是构建保留产物。
 
 ## Config Paths
@@ -240,33 +251,56 @@ python _test_eval_style.py
 
 ## Stage 4 QLoRA（当前优先级）
 
-阶段4当前目标不是立刻全量训练，而是先暴露微调主线的最大风险：本机 `.venv-train/`、CUDA、Unsloth、8B 显存和小样本文风提升是否成立。
+阶段4目标是验证本地 8B QLoRA 是否能稳定改善形式文风指标，并明确微调与记忆系统的边界。训练依赖放在 `requirements-train.txt` 与 `.venv-train/`，不污染主运行环境。
 
-当前基线：
+当前基线与版本：
 
-- 训练依赖放在 `requirements-train.txt`，安装到 `.venv-train/`，不污染主运行环境。
-- 阶段3零微调基线为 `style_score 50.92`。
-- 训练样本必须遵守章节时序口径：目标第 N 章时，输入最多只能使用 `max_chapter=N-1` 的设定和摘要。
-- **实测 VRAM（2026-06-18）推理前向**：`huihui-ai/Huihui-Qwen3-8B-abliterated-v2` 4-bit，peak 5.80 GB，reserved 5.91 GB（无 FA2，Windows，sm_89）。
-- **实测 VRAM（2026-06-18）训练态**：4-bit + LoRA r=16 + max_seq_length=2048 + batch=1 + gc=unsloth → **OOM** (fused cross entropy)。LoRA wrap 后 reserved 5.94 GB，forward pass 峰值 7.32 GB / reserved 7.44 GB，剩余 0.56 GB 不足以运行 vocab=152064 的 fused CE。需将 max_seq_length 降至 512 或减小样本长度后重测。
+- 零微调基线：style_score `50.92`，repetition_risk `high`，contamination_risk `low`。
+- v2：novel1 20 条样本，5 optimizer steps，`outputs/qlora_run_v2/`，style_score `60.48`，小样本链路通过。
+- v3：merged 544 条样本，136 optimizer steps，`outputs/qlora_run_v3/`，style_score `46.05`，扩样训练未通过。
+- v3 显存：`max_seq_length=1024` 时 forward/backward peak 约 `6.82GB`；样本数增加主要影响训练时长，不改变单步显存量级。
 
-当前任务顺序：
+阶段4数据流：
 
-```powershell
-# 已完成：检查/修复训练环境中的 torch CUDA build
-# 已完成：最小平台验证
-python _test_unsloth_forward.py
+```text
+novel1:
+  pipeline/build_train_samples.py
+  -> data/processed/train_samples.jsonl
 
-# 已完成：8B 4-bit 推理显存边界验证
-python _test_unsloth_forward.py --model huihui-ai/Huihui-Qwen3-8B-abliterated-v2
+novel2:
+  data/raw/novel2_raw.txt
+  -> pipeline/build_novel2_labeled_samples.py
+  -> data/processed/novel2_samples.jsonl
+  -> data/processed/novel2_labels.jsonl
 
-# 已完成：构造并验证小样本训练数据
-python pipeline/build_train_samples.py
-python _test_train_samples.py
+merge:
+  pipeline/merge_train_samples.py
+  -> data/processed/merged_train_samples.jsonl
 
-# 当前卡点：训练态 OOM，下一步先降低 seq_len 或样本长度后重测
-python pipeline/train_qlora.py --max-seq-length 512
+train:
+  pipeline/train_qlora.py
+  -> outputs/qlora_run_v*/
+
+evaluate:
+  pipeline/generate_lora_multi.py
+  -> outputs/lora_candidate_*.txt
+  -> scripts/eval_draft.py
+  -> outputs/*_eval.json
+  -> baselines/phase4_pre/*_metrics.json（脱敏纯指标）
 ```
+
+样本契约：
+
+- novel1 样本保留真实推理结构相关字段，必须遵守 `target_chapter=N -> max_chapter=N-1`。
+- novel2 只用于文风学习，不接入 story_bible 检索，不要求时序 frontmatter。
+- 合并样本不压平原始字段，只新增统一追踪字段：`merged_sample_id`、`source_book`、`source_sample_id`、`source_section`、`source_section_confidence`、`content_sensitivity`、`content_sensitivity_confidence`。
+- 标签文件不得保存原文片段，只保存 ID、标签和 confidence。
+
+当前诊断状态：
+
+- v3 失败主要来自句长异常与标点密度退化，而不是 repetition 或 contamination。
+- 训练数据按 `content_sensitivity` 分组的标点密度差异很小，已排除 explicit_sensitive 占比作为主要解释。
+- 当前需要完成同一个 v3 adapter 的重复生成诊断；若低标点密度稳定重现，再讨论 best checkpoint / 训练轮次 / 保存逻辑。
 
 验收边界：
 

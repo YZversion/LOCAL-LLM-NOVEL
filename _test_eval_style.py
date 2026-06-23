@@ -236,6 +236,21 @@ def main() -> int:
     assert multi_code == 2
     assert "Multiple .txt files found" in multi_stderr.getvalue()
 
+    # Verify character-based duplicate_paragraph_ratio (post-fix behaviour).
+    # One large paragraph (40 chars) duplicated among four short unique ones (2 chars each).
+    # Old count-ratio: 1 extra copy / 6 total paragraphs = 0.1667 (< 0.25 → medium).
+    # New char-ratio:  (40*2) / (40+2+2+2+2+40) = 80/88 ≈ 0.9091 (>= 0.25 → high).
+    _big = "甲" * 40
+    _char_ratio_text = "\n\n".join([_big, "乙。", "丙。", "丁。", "戊。", _big])
+    _cr = eval_style.repetition_stats(_char_ratio_text)
+    assert _cr["duplicate_paragraph_count"] == 1, "extra-copy count should remain 1"
+    assert _cr["duplicate_paragraph_ratio"] > 0.85, (
+        f"char-based ratio should be ~0.9091, got {_cr['duplicate_paragraph_ratio']}"
+    )
+    assert _cr["repetition_risk"] == "high", (
+        "large duplicated paragraph should now trigger high risk via char-based threshold"
+    )
+
     print("eval_style fixture regression tests passed")
     return 0
 
