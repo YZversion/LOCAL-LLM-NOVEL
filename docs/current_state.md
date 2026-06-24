@@ -36,8 +36,9 @@ _最后更新：2026-06-24_
 [✗] 阶段4    v4（风丝引 57 条）训练完成但评测未通过，基础续写不稳定
 [→] 阶段4    Stage 0 重锚评测：先修 adapter_cli raw prompt 构造
 [ ] 阶段4    修好 raw prompt 后再 fan-out 纯基座/v2/v4 × 4 anchors × 2 repeats
+[✓] 本地UI    `scripts/run_v2_local_ui.ps1` 使用 `outputs/qlora_run_v2/`，不走 Web
 [ ] Debug    retrieval_manifest.json（检索注入可视化，System B 前置）
-[ ] 系统B    kg.json -> Markdown cards -> BM25（待基础生成稳定后）
+[✓] 系统B MVP kg.json -> Markdown cards -> BM25（人工审核 facts，已可测试）
 [ ] 阶段5    向量 RAG（按需）
 ```
 
@@ -95,7 +96,18 @@ _最后更新：2026-06-24_
 3. 判别通过后才进入 Stage 0 fan-out：纯基座/v2/v4 × 4 anchors × 2 repeats。只比较 adapter_cli 三元组内部，不和 Ollama baseline 求差。
 4. Stage 0 重锚完成后，再决定 QLoRA 是数据重构还是旋钮单变量阶梯。
 5. 同时可以先加轻量 debug：`outputs/debug/retrieval_manifest.json`，记录检索注入来源、原因、槽位占用和 temporal filter 排除数量。
-6. 基础生成稳定后，再做 System B MVP：`data/story_bible/kg.json` 作为事实源，Markdown cards 只是给现有 Retriever 读取的投影层。
+6. System B MVP 已可测试：`kg_extract.py` 生成可编辑 facts 草稿，`update_kg.py` 合并 `kg.json` 并渲染 Markdown cards；抽取仍需人工审核，不自动相信模型。
+
+### 本地 v2 UI
+
+当前成品入口不走 Web / Gradio：
+
+```powershell
+.\scripts\run_v2_local_ui.ps1
+.\scripts\run_v2_local_ui.ps1 -ContextFile outputs\debug\test_context_ch1_clean.txt
+```
+
+默认 adapter：`outputs/qlora_run_v2/`。脚本会设置 `outputs/hf_stage0_proxy/` 作为进程级 HF cache，避免 Unsloth import 被默认 HF cache 权限卡住。
 
 ### Stage 0 重锚评测现状
 
@@ -162,18 +174,24 @@ and (valid_to is None or valid_to >= max_chapter)
 
 ---
 
-## 系统 B（知识图谱，待基础生成稳定后）
+## 系统 B（知识图谱 MVP）
 
-核心链路（待实现）：
+核心链路（已实现 MVP）：
 
 ```text
 已接受章节文本 -> kg_extract.py -> kg_update.py -> data/story_bible/kg.json
 -> kg_render.py -> Markdown cards -> 下一章 Retriever 用 BM25 + frontmatter 检索
 ```
 
-待实现脚本：`kg_extract.py` / `kg_update.py` / `kg_render.py` / `update_kg.py`
+已实现脚本：`scripts/kg_extract.py` / `scripts/kg_update.py` / `scripts/kg_render.py` / `scripts/update_kg.py`
 
-第一版只做朴素可控闭环，不做复杂 GraphRAG。`kg.json` 是事实源，Markdown 是投影层，方便未来升级 vector/KG 时不推翻数据。
+第一版只做朴素可控闭环，不做复杂 GraphRAG。`kg.json` 是事实源，Markdown 是投影层，方便未来升级 vector/KG 时不推翻数据。`kg_extract.py` 只生成可编辑草稿，事实必须人工确认后再 `update_kg.py`。
+
+回归测试：
+
+```powershell
+python _test_system_b.py
+```
 
 已补充角色（手写卡）：宁楚珣（ch42）、大理相（ch52）。
 接受 bible=[] 的角色（出场 1 章、影响有限）：洛老太太、洛安、老太监、余挚。

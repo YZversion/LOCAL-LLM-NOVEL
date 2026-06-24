@@ -16,42 +16,63 @@ _最后更新：2026-06-24_
 
 ---
 
-## 当前阶段：阶段4 QLoRA 重规划
+## 当前阶段：本地成品化（v2 + System B MVP）
 
 详细环境/实验记录见 `docs/phase4_qlora.md`，项目全局状态见 `docs/current_state.md`。
 
-**当前任务：Stage 0 先修 `adapter_cli.py` raw prompt 构造，再重跑 `v2 × ch1_clean × seed1101` 判别实验。判别通过前禁止 fan-out 到 3×4×2。**
+**当前任务：用历史可用的 `outputs/qlora_run_v2/` 作为本地终端续写入口，并落地 System B 第一版 `kg.json -> Markdown cards -> BM25`。今天不走 Web / Gradio，不训练、不导出、不合并 LoRA。**
 
 已确认决策：
 - v3（novel2 合并 544 条）已明确放弃：round2/3 严重崩溃（角色错乱 + 区块链/AI 等技术术语），novel2 分布与风丝引不兼容，不再追究根因，不再做 repeat 诊断。
-- v4 已完整训练完成：57 条风丝引样本（ch2-58），`context_chars=700`，`max_seq_length=1536`，`num_train_epochs=3`，`warmup_steps=2`，`UNSLOTH_CE_LOSS_TARGET_GB=0.5`，adapter 保存在 `outputs/qlora_run_v4/`。
-- v4 训练曲线健康但评测未通过：loss 从 3.758 降到 2.223，显存峰值约 7.38GB；生成质量仍不稳定，不能导出或接生产。
-- Stage 0 评测集已冻结在 `outputs/eval_anchors/`（4 个 anchor txt + `anchors_manifest.json` sha 锁），不得重选或修改 anchor。
-- `pipeline/adapter_cli.py` 已支持 `--raw-prompt-file`、`--seed`、`MAX_RECENT_CHARS=800`，并打印实际生效的 `temperature/top_p/top_k/repetition_penalty`。
-- 评测 reference 已锁定为 `data/raw/风丝引_原文.txt`；所有 `scripts/eval_draft.py` 调用必须显式传 `--reference data/raw/风丝引_原文.txt`，中途不得更换。
+- v4 已完整训练完成，但评测未通过：57 条风丝引样本、`context_chars=700`、`max_seq_length=1536`、3 epoch，adapter 在 `outputs/qlora_run_v4/`；生成质量整体不稳定，不能导出或接生产。
+- 今天的可用模型选择是 **v2**：`outputs/qlora_run_v2/` 是历史可用锚点，曾在同一 reference 下得到 style_score `60.48`，优先用于本地成品入口。
+- 内网环境不使用 Web UI。当前入口是 PowerShell 终端脚本：`scripts/run_v2_local_ui.ps1`。
+- System B 第一版只做朴素闭环：人工审核 facts -> `kg.json` 事实源 -> Markdown cards 投影层 -> 现有 Retriever 的 BM25 + frontmatter 检索。暂不上 GraphRAG / LightRAG。
 
-v4 已知评测结论：
-- 坏触发点评测：`outputs/adapter_candidate_v4_eval.txt` / `outputs/v4_eval_result.json`，style_score `39.41`。从 ch58 附近“凰后/凤倾汐”上文续写时触发“凰后 -> 叶欢”强关联，切入叶欢修仙子线，并用训练数据外的通用玄幻词汇（金丹/凝气/昆仑山脉等）填充。
-- 干净起点复测：`outputs/adapter_candidate_20260624_1114.txt` / `outputs/v4_ch1_clean_eval.json`，style_score `48.7361`，仍低于基线 `50.92` 和 v2 `60.48`。人工核查发现标题样文本、擅自跳剧情、乱加人物、现代感词汇等问题。
-- 结论：v4 不是单点叶欢线问题，而是当前 57 条 / 700c / 1536 / 3epoch 配置整体不稳定。
+本地 v2 UI：
 
-Stage 0 最新阻塞：
-- 纯基座 `ch1_clean` seed1101 raw smoke 能生成，候选 `outputs/adapter_candidate_20260624_1359.txt`，但退化成 instruct 助手腔、标题、Markdown 菜单和写作建议。
-- 同一 `ch1_clean`、同 seed1101、挂 v2 adapter 后也出现同类退化（开头“这是一段充满诗意与情感的画面描写...”，含 `**《浮生一梦》**` 和“如果需要继续发展剧情...”）。
-- 因 v2 也退化，判定为 **raw prompt 构造问题**，不是纯基座固有行为。当前 raw 模式实际 prompt 只是 `<|im_start|>user\n[800字原文]\n<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>`，缺少“直接续写小说正文、不要解释、不要标题、不要向用户提问”等约束。
-- 下一步只允许最小修改 raw prompt 构造；修复后先重跑 `v2 × ch1_clean × seed1101`。若 v2 恢复正文续写，再用固定 reference 跑 eval，之后才考虑完整 3×4×2 fan-out。
+```powershell
+.\scripts\run_v2_local_ui.ps1
+.\scripts\run_v2_local_ui.ps1 -ContextFile outputs\debug\test_context_ch1_clean.txt
+```
+
+默认 adapter：`outputs/qlora_run_v2/`。脚本会设置进程级 HF cache proxy：`outputs/hf_stage0_proxy/`，避免 Codex sandbox 用户被默认 HF cache 写权限探针卡住。
+
+System B MVP 脚本：
+
+```powershell
+# 1. 从已接受章节生成可编辑草稿；草稿必须人工审核
+python scripts\kg_extract.py --chapter 59 --input outputs\chapter_059.txt --out outputs\system_b\ch59_facts.draft.json --entities 林清雪,颜儿
+
+# 2. 合并已审核 facts，并渲染给 Retriever 读取的 Markdown cards
+python scripts\update_kg.py --facts outputs\system_b\ch59_facts.reviewed.json --kg data\story_bible\kg.json --out-dir data\story_bible\generated\system_b --prune
+
+# 3. 回归测试
+python _test_system_b.py
+```
+
+System B 数据口径：
+- `data/story_bible/kg.json` 是事实源；`data/story_bible/generated/system_b/` 只是投影层。
+- 状态变化不覆盖旧事实：旧状态用 `valid_to` 关闭，新状态用新的 `valid_from` 开启。
+- 支持类型：`event`、`character_state`、`relationship_delta`、`location_state`、`plot_thread`。
+- 每条事实应有 `evidence.chapter`，可选 `source_offset` 或短引用位置；不要把长原文塞进 KG。
+- `kg_extract.py` 只生成低置信度草稿，不自动相信模型抽取；写入 `kg.json` 前必须人工确认。
+
+阶段4实验现状保留：
+- Stage 0 raw-prompt 重锚评测仍是未完成实验线，不作为今天成品主线。当前阻塞是 raw prompt 把 anchor 当成待点评素材，导致纯基座和 v2 都退化成助手腔。
+- `outputs/eval_anchors/` 是冻结评测资产，不得重选或修改。
+- 若以后恢复 Stage 0，先修 `pipeline/adapter_cli.py` 的 raw prompt 构造，再重跑 `v2 × ch1_clean × seed1101`，通过后才 fan-out 到 3×4×2。
 
 运行环境已知坑：
 - 默认 HF cache `C:\Users\14390\.cache\huggingface\hub` 对 Codex sandbox 只有读权限，Unsloth import 会卡在 cache writable probe。
-- Stage 0 运行时使用进程级 HF cache proxy：`outputs/hf_stage0_proxy/`，其中 `hub/models--huihui-ai--Huihui-Qwen3-8B-abliterated-v2` 是指向真实 HF cache 的 junction。设置 `HF_HOME/HF_HUB_CACHE/HF_XET_CACHE` 到该 proxy 后，repo id 可离线解析，4-bit 基座加载约 15s，峰值约 5.77GB。
+- 使用 `outputs/hf_stage0_proxy/` 作为进程级 `HF_HOME/HF_HUB_CACHE/HF_XET_CACHE` 后，repo id 可离线解析；base model 目录用 junction 指向真实 HF cache，避免复制 16GB 权重。
+- `adapter_cli.py` 的 HF generate 只实际生效 `temperature/top_p/top_k/repetition_penalty`，dry/presence/frequency 不生效。
 
 当前优先级：
-1. **修 raw prompt 构造**：raw 模式仍不走 retrieval，但必须明确要求模型从断点直接续写小说正文，禁止标题、分析、解释、写作建议和提问。
-2. **重跑最小判别**：只跑 `v2 × ch1_clean × seed1101`；通过后再用固定 reference 跑 eval。
-3. **Stage 0 fan-out**：判别通过后才跑纯基座/v2/v4 × 4 anchors × 2 repeats；只比较 adapter_cli 三元组内部，不和 Ollama baseline 求差。
-4. **QLoRA 回退或重规划**：以 v2 `style_score 60.48` 为历史可用锚点，但新 Stage 0 数字必须在修 prompt 后同口径重锚。
-5. **轻量检索 debug**：实现 `outputs/debug/retrieval_manifest.json`。
-6. **System B MVP**：等基础生成稳定后，再做 `kg.json -> Markdown cards -> BM25`，不要现在上复杂 GraphRAG/LightRAG。
+1. **验收本地 v2 终端 UI**：用 `scripts/run_v2_local_ui.ps1` 跑一段真实上文，人工确认不出现 Web 依赖、HF cache 权限卡死或助手腔退化。
+2. **验收 System B MVP**：用一份人工审核 facts 更新 `kg.json`，确认 Markdown cards 能被 `Retriever.search_bible(..., max_chapter=N)` 按时序召回。
+3. **补轻量检索 debug**：实现 `outputs/debug/retrieval_manifest.json`，记录 target/max chapter、命中文件、注入原因、槽位字符数和 temporal filter 排除数量。
+4. **之后再回到 QLoRA 重规划**：基础成品可用后，再决定是重构样本还是单变量旋钮阶梯。
 
 ## 已知限制 / 设计权衡
 
@@ -72,7 +93,9 @@ Stage 0 最新阻塞：
 
 ## 禁止修改的文件（非明确任务不碰）
 
-`cowriter/session.py` · `cowriter/prompts.py` · `cowriter/retriever.py` · `cowriter/web.py` · `cowriter/chapter.py` · `config.yaml` · `data/raw/` · `data/story_bible/` · `pipeline/eval_style.py` · `data/processed/merged_train_samples.jsonl`（novel2 544 条，已放弃，保留备档）
+`cowriter/session.py` · `cowriter/prompts.py` · `cowriter/retriever.py` · `cowriter/web.py` · `cowriter/chapter.py` · `config.yaml` · `data/raw/` · `pipeline/eval_style.py` · `data/processed/merged_train_samples.jsonl`（novel2 544 条，已放弃，保留备档）
+
+`data/story_bible/` 默认不碰；只有明确执行 System B 写入任务时，才允许写 `data/story_bible/kg.json` 和 `data/story_bible/generated/system_b/`。
 
 ---
 
@@ -90,6 +113,12 @@ python _test_train_samples.py
 
 # LoRA 多轮生成（.venv-train 激活后）
 python pipeline/generate_lora_multi.py
+
+# 本地 v2 终端 UI（不走 Web）
+.\scripts\run_v2_local_ui.ps1
+
+# System B MVP 回归测试
+python _test_system_b.py
 ```
 
 ---

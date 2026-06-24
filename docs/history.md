@@ -4,6 +4,20 @@
 
 ---
 
+## 本地成品化：v2 终端 UI + System B MVP（2026-06-24）
+
+- 决定以历史可用 adapter `outputs/qlora_run_v2/` 作为今天的本地成品入口；v3/v4 保留为实验记录，不导出、不接生产。
+- 新增 `scripts/run_v2_local_ui.ps1`：内网环境下不走 Web / Gradio，直接调用 `.venv-train` + `pipeline/adapter_cli.py`，默认 adapter 为 v2，并设置进程级 HF cache proxy `outputs/hf_stage0_proxy/`。
+- 新增 System B MVP 脚本：
+  - `scripts/kg_extract.py`：从已接受章节文本生成可人工编辑的 facts 草稿。
+  - `scripts/kg_update.py`：把已审核 facts 合并进 `data/story_bible/kg.json`。
+  - `scripts/kg_render.py`：把 `kg.json` 渲染成 Retriever 可读的 Markdown cards。
+  - `scripts/update_kg.py`：合并 + 渲染的一键入口。
+- 新增 `_test_system_b.py`，验证 `kg.json -> Markdown cards -> Retriever BM25 + frontmatter` 链路，以及 `target_chapter=N -> max_chapter=N-1` 的时序隔离。
+- 文档同步：`README.md`、`CLAUDE.md`、`architecture.md`、`docs/current_state.md`、`docs/phase4_qlora.md`。
+
+---
+
 ## 阶段2.6 模型迁移决策记录（2026-06-16，已完成）
 
 ### 为什么弃用旧模型（R1 蒸馏 MoE 2X1.5B）

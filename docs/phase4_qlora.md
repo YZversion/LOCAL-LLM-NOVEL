@@ -4,6 +4,18 @@ _最后更新：2026-06-24_
 
 ---
 
+## 2026-06-24 当前落地方向
+
+本文件保留 QLoRA 实验记录。当前成品化路线以 `outputs/qlora_run_v2/` 作为本地终端 UI 的 adapter，不继续推进 v3 repeat，也不把 v4 导出或接生产。
+
+已新增本地入口：`scripts/run_v2_local_ui.ps1`，用于内网环境下绕开 Web / Gradio，直接调用 `.venv-train` + `pipeline/adapter_cli.py`。
+
+System B 第一版已落地为可测试 MVP：`scripts/kg_extract.py` 生成可编辑 facts 草稿，`scripts/update_kg.py` 合并 `data/story_bible/kg.json` 并渲染 `data/story_bible/generated/system_b/` Markdown cards，供现有 Retriever 走 BM25 + frontmatter 检索。回归测试：`python _test_system_b.py`。
+
+Stage 0 raw-prompt 重锚评测仍保留为后续实验线。若以后恢复，先修 raw prompt 构造，再重跑 `v2 × ch1_clean × seed1101`；今天的成品主线不依赖完整 3×4×2 fan-out。
+
+---
+
 ## 环境
 
 | 项目 | 值 |

@@ -32,7 +32,12 @@ LOCAL-LLM-NOVEL/
 │  ├─ split_characters.py      # 将人物汇总拆成单人物 Markdown；单人物卡片写完整 frontmatter
 │  ├─ add_frontmatter.py       # 一次性：给存量 story_bible .md 补完整 frontmatter
 │  ├─ gen_chapter_summaries.py # 从原文生成缺失章节摘要，追加到 chapter_summaries.md
-│  └─ eval_draft.py            # 阶段3：对已有草稿运行确定性评测的 wrapper
+│  ├─ eval_draft.py            # 阶段3：对已有草稿运行确定性评测的 wrapper
+│  ├─ kg_extract.py            # System B：从已接受章节生成可编辑 facts 草稿
+│  ├─ kg_update.py             # System B：合并人工审核 facts 到 kg.json
+│  ├─ kg_render.py             # System B：渲染 Markdown cards 给 Retriever
+│  ├─ update_kg.py             # System B：facts -> kg.json -> Markdown cards
+│  └─ run_v2_local_ui.ps1      # 本地 v2 adapter 终端 UI（不走 Web）
 ├─ data/
 │  ├─ raw/                     # 原始小说 txt（gitignore）
 │  ├─ processed/               # 后续预处理产物（gitignore）
@@ -373,6 +378,17 @@ outputs/eval_anchors/
 - Stage 0 可使用进程级 proxy：`outputs/hf_stage0_proxy/`，并设置 `HF_HOME/HF_HUB_CACHE/HF_XET_CACHE`。该目录内的 base model cache 用 junction 指向真实 HF cache，避免复制 16GB 权重。
 - 这只是运行规避，不是项目架构依赖，不应提交 `outputs/` 内容。
 
+## Local V2 Adapter UI
+
+当前本地成品入口不使用 Web / Gradio，而是使用 PowerShell + Rich 终端 UI：
+
+```powershell
+.\scripts\run_v2_local_ui.ps1
+.\scripts\run_v2_local_ui.ps1 -ContextFile outputs\debug\test_context_ch1_clean.txt
+```
+
+该脚本默认使用 `outputs/qlora_run_v2/`，设置 `HF_HOME/HF_HUB_CACHE/HF_XET_CACHE` 到 `outputs/hf_stage0_proxy/`，然后启动 `pipeline/adapter_cli.py`。如果提供 `-ContextFile`，会走 Retriever / `build_prompt` 的正常续写链路；不提供则在终端里粘贴上文。
+
 ## Story Bible Build
 
 ```powershell
@@ -421,31 +437,35 @@ outputs/debug/retrieval_manifest.json
 
 这个文件只用于可见性和诊断，不改变检索排序或 prompt 内容。它比 UI 更优先，因为长篇项目最怕“模型怎么知道这件事”的来源不透明。
 
-## System B Memory（待基础生成稳定后）
+## System B Memory（MVP 已实现）
 
-系统B是记忆闭环：用结构化写回驱动 `story_bible` 动态更新，而不是靠微调“记住”新事实。它应在基础生成稳定后推进；第一版不做复杂 GraphRAG，只做朴素但可控的 `kg.json -> Markdown cards -> BM25`。
+系统B是记忆闭环：用结构化写回驱动 `story_bible` 动态更新，而不是靠微调“记住”新事实。第一版不做复杂 GraphRAG，只做朴素但可控的 `kg.json -> Markdown cards -> BM25`。
 
 当前状态：
 
-- `data/story_bible/kg.json` 尚不存在。
-- `scripts/kg_extract.py`、`scripts/kg_update.py`、`scripts/kg_render.py`、`scripts/update_kg.py` 尚未创建。
+- `scripts/kg_extract.py` 已实现：从已接受章节文本创建可编辑 facts 草稿，默认 `status=needs_human_review`。
+- `scripts/kg_update.py` 已实现：合并人工审核 facts 到 `data/story_bible/kg.json`。
+- `scripts/kg_render.py` 已实现：渲染事实卡和实体聚合卡到 `data/story_bible/generated/system_b/`。
+- `scripts/update_kg.py` 已实现：一键 facts -> `kg.json` -> Markdown cards。
+- `_test_system_b.py` 已实现：验证 kg.json -> cards -> Retriever BM25，并覆盖 temporal visibility。
 - `kg.json` 应作为事实源，Markdown 只是给现有 Retriever 读取的投影层。这样未来升级 vector/KG 时不用推翻数据。
 - 后续目标是支持写完第 N 章后把新增事实写回，并在第 N+1 章可检索。
 
 计划链路：
 
 ```text
-补存量：
+人工审核闭环：
   已接受章节文本 / 原文
-  → kg_extract.py
-  → kg_update.py
+  → kg_extract.py 生成可编辑 facts 草稿
+  → 人工检查和拆分事实
+  → update_kg.py
   → data/story_bible/kg.json
-  → kg_render.py
-  → data/story_bible/generated/.../*.md（含完整 frontmatter）
+  → data/story_bible/generated/system_b/**/*.md（含完整 frontmatter）
 
 续写后：
-  python scripts/update_kg.py --chapter N --input outputs/chapter_N.txt
-  → 抽取新增人物 / 关系 / 状态变化 / 证据
+  python scripts/kg_extract.py --chapter N --input outputs/chapter_N.txt --out outputs/system_b/chN_facts.draft.json
+  python scripts/update_kg.py --facts outputs/system_b/chN_facts.draft.json
+  → 合并新增人物 / 关系 / 状态变化 / 证据
   → 合并 kg.json
   → 重新渲染受影响 Markdown 卡片
   → 下一章 retrieve(max_chapter=N) 自动可见

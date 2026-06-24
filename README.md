@@ -1,6 +1,6 @@
 # 本地小说续写助手
 
-A local-first AI co-writer for long-form Chinese fiction. Runs entirely on your own hardware via [Ollama](https://ollama.com/) — no cloud, no data leakage.
+A local-first AI co-writer for long-form Chinese fiction. Runs entirely on your own hardware — no cloud, no data leakage.
 
 **Current model:** `huihui_ai/qwen3-abliterated:8b-v2` · **Hardware:** RTX 4070 Laptop 8GB
 
@@ -27,13 +27,13 @@ Then calls the local LLM to continue the story.
 | System A — temporal filtering (`revealed_in` / `valid_from` / `valid_to`) | ✅ Complete, 45 tests passing |
 | Chapter summaries (`chapter_summaries.md`) | ✅ ch1–58 complete |
 | Story bible character cards | ✅ 21 characters, ch1–20 coverage |
-| Phase 4 — QLoRA fine-tuning | 🔧 Current focus |
+| Phase 4 — QLoRA fine-tuning | 🔧 v2 selected for local adapter UI |
 | Phase 4 — CUDA + Unsloth forward | ✅ Passed |
 | Phase 4 — 8B 4-bit inference VRAM | ✅ Passed, peak 5.80 GB |
-| Phase 4 — training samples | ✅ 20 samples, ch2–21, validation passed |
-| Phase 4 — training run | ⚠️ OOM at `max_seq_length=2048`; next test uses shorter seq/sample |
-| System B — dynamic memory update | ⏸ Deferred until QLoRA path is proven |
-| Web UI (Gradio) | ✅ Available via `cowriter/web.py` |
+| Phase 4 — v3/v4 | ✗ Not used for product |
+| System B — dynamic memory update | ✅ MVP scripts + regression test |
+| Local UI | ✅ PowerShell terminal UI via v2 adapter |
+| Web UI (Gradio) | Available, but not required for local/offline product |
 
 ---
 
@@ -43,15 +43,16 @@ Then calls the local LLM to continue the story.
 # Install dependencies
 pip install -r requirements.txt
 
-# Launch web UI
-python cowriter/web.py
+# Launch the local v2 adapter UI (no web, no browser)
+.\scripts\run_v2_local_ui.ps1
 
-# Or use CLI
-python cowriter/app.py
+# Or pass a starting context file
+.\scripts\run_v2_local_ui.ps1 -ContextFile outputs\debug\test_context_ch1_clean.txt
 ```
 
-Requires Ollama running locally with the model pulled:
+The older Ollama CLI remains available:
 ```powershell
+python cowriter/app.py
 ollama pull huihui_ai/qwen3-abliterated:8b-v2
 ```
 
@@ -74,6 +75,11 @@ scripts/
   split_characters.py        # Split character data into individual .md files
   add_frontmatter.py         # One-time: add YAML frontmatter to story_bible files
   eval_draft.py              # Style evaluation wrapper
+  kg_extract.py              # System B: write editable facts draft
+  kg_update.py               # System B: merge reviewed facts into kg.json
+  kg_render.py               # System B: render Markdown cards for Retriever
+  update_kg.py               # System B: facts -> kg.json -> Markdown cards
+  run_v2_local_ui.ps1        # Local terminal UI for qlora_run_v2
 
 pipeline/
   eval_style.py     # Deterministic style metrics (repetition, contamination, score)
@@ -95,57 +101,40 @@ config.yaml         # Single source of truth for all parameters
 
 ---
 
-## Phase 4 — QLoRA fine-tuning (current focus)
+## Local v2 Adapter UI
 
-Training dependencies are isolated in `.venv-train/`; do not install them into the main runtime environment.
+The current local product path uses `outputs/qlora_run_v2/` and the terminal UI in `pipeline/adapter_cli.py`.
+It does not use Gradio or any web server.
 
 ```powershell
-# Create / activate the training venv first, then install torch cu130 before the rest:
-python -m venv .venv-train
 .\.venv-train\Scripts\Activate.ps1
-pip install torch==2.10.0 torchvision==0.25.0 torchaudio --index-url https://download.pytorch.org/whl/cu130
-pip install -r requirements-train.txt
+.\scripts\run_v2_local_ui.ps1 -ContextFile <context.txt>
 ```
 
-Validation commands:
+`run_v2_local_ui.ps1` sets a local Hugging Face cache proxy under `outputs/hf_stage0_proxy/`.
+This avoids the Windows sandbox read-only cache issue during Unsloth import.
+
+## System B — Dynamic memory MVP
+
+System B now has the first controllable loop:
+
+```text
+accepted chapter text -> editable facts JSON -> kg.json -> Markdown cards -> Retriever BM25
+```
 
 ```powershell
-# Small model platform check: passed on 2026-06-18
-.\.venv-train\Scripts\python.exe _test_unsloth_forward.py
+# Create an editable draft from accepted text
+python scripts\kg_extract.py --chapter 59 --input outputs\chapter_059.txt --out outputs\system_b\ch59_facts.draft.json --entities 林清雪,颜儿
 
-# 8B 4-bit inference VRAM check: passed, peak 5.80 GB
-.\.venv-train\Scripts\python.exe _test_unsloth_forward.py --model huihui-ai/Huihui-Qwen3-8B-abliterated-v2
+# After editing/reviewing the JSON, merge and render cards
+python scripts\update_kg.py --facts outputs\system_b\ch59_facts.draft.json
 
-# Build and validate temporally safe training samples
-python pipeline/build_train_samples.py
-python _test_train_samples.py
+# Regression test for kg.json -> cards -> Retriever temporal visibility
+python _test_system_b.py
 ```
 
-Current training blocker: `max_seq_length=2048` with 4-bit + LoRA r=16 reaches about 7.44 GB reserved and OOMs in fused cross entropy. Next step is to retry with `max_seq_length=512` or rebuild shorter samples, e.g. `context_chars=300` / `completion_chars=200`.
-
-```powershell
-.\.venv-train\Scripts\python.exe pipeline/train_qlora.py --max-seq-length 512
-```
-
-QLoRA is evaluated only on writing style, rhythm, and instruction following. Dynamic memory for new characters is a separate System B concern.
-
----
-
-## System B — Dynamic memory (deferred)
-
-System B will eventually update `story_bible/` after each accepted chapter. It is deliberately deferred until the QLoRA path is proven.
-
-Planned shape:
-
-```powershell
-python scripts/update_kg.py --chapter 59 --input outputs/chapter_059.txt
-```
-
-Planned behavior:
-- Extract new characters, relationship changes, and state updates via LLM
-- Merge them into `data/story_bible/kg.json`
-- Re-render affected character `.md` cards with updated frontmatter
-- Make new info available to the retriever for chapter 60+
+`kg.json` is the fact source. Markdown cards under `data/story_bible/generated/system_b/`
+are only the projection layer for the existing Retriever.
 
 ---
 
