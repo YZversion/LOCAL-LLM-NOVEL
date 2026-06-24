@@ -12,11 +12,18 @@ Usage:
     python pipeline/adapter_cli.py --adapter outputs/qlora_run_v4/
     python pipeline/adapter_cli.py --adapter outputs/qlora_run_v4/ \\
         --context-file outputs/debug/test_context_ch1_clean.txt
-    python pipeline/adapter_cli.py --adapter outputs/qlora_run_v4/ \\
+    python pipeline/adapter_cli.py --adapter outputs/qlora_run_v2/ \\
         --raw-prompt-file outputs/eval_anchors/ch1_clean.txt
+    # 纯基座（不传 --adapter）:
     python pipeline/adapter_cli.py \\
-        --adapter huihui-ai/Huihui-Qwen3-8B-abliterated-v2 \\
-        --raw-prompt-file outputs/eval_anchors/ch1_clean.txt
+        --raw-prompt-file outputs/eval_anchors/ch1_clean.txt \\
+        --max-seq-length 4096 --seed 1101 --batch \\
+        --out-file outputs/stage0/base_ch1_clean_s1101.txt
+    # batch 模式（带 adapter）:
+    python pipeline/adapter_cli.py --adapter outputs/qlora_run_v2/ \\
+        --raw-prompt-file outputs/eval_anchors/ch1_clean.txt \\
+        --max-seq-length 4096 --seed 1101 --batch \\
+        --out-file outputs/stage0/v2_ch1_clean_s1101.txt
 """
 import argparse
 import gc
@@ -49,6 +56,17 @@ _MIN_DEDUP_CHARS     = 10
 _VRAM_LOAD_GB   = 6.30   # 加载后 alloc
 _VRAM_INFER_PEAK_GB = 8.47  # 推理时峰值（实测）
 _VRAM_BUDGET_GB = 8.59   # 硬件总量
+
+# Stage 0 raw prompt 指令模板（已锁定，SHA 记录在 outputs/eval_anchors/anchors_manifest.json）
+# 语义：模板 + anchor 原文共同构成实际输入；任何修改必须同步更新 manifest 的 prompt_template.sha256
+RAW_PROMPT_TEMPLATE = (
+    "你是古风言情小说续写助手。"
+    "请直接从以下原文断点处续写小说正文，"
+    "不要标题、不要分析、不要向用户提问、不要写作建议或说明，"
+    "只输出小说正文。\n\n"
+    "【原文（断点）】\n"
+    "{text}"
+)
 
 HELP_TEXT = """
 命令列表：
@@ -243,8 +261,12 @@ def main() -> int:
     global TEMPERATURE, TOP_P, TOP_K, REPETITION_PENALTY
 
     parser = argparse.ArgumentParser(description="LoRA adapter 交互式续写 CLI")
-    parser.add_argument("--adapter", required=True,
-                        help="LoRA adapter 目录路径，或可由 Unsloth 加载的基座模型名")
+    parser.add_argument("--adapter", default=None,
+                        help="LoRA adapter 目录路径，或可由 Unsloth 加载的基座模型名；"
+                             "不传则用 --base-model 加载纯基座")
+    parser.add_argument("--base-model",
+                        default="huihui-ai/Huihui-Qwen3-8B-abliterated-v2",
+                        help="纯基座模型 ID（仅在不传 --adapter 时生效）")
     parser.add_argument("--context-file", default=None,
                         help="初始上文 .txt 文件；不提供则交互粘贴")
     parser.add_argument("--raw-prompt-file", default=None,
@@ -254,6 +276,10 @@ def main() -> int:
     parser.add_argument("--max-seq-length",type=int, default=MAX_SEQ_LENGTH_INFER)
     parser.add_argument("--config",        default="config.yaml")
     parser.add_argument("--seed",          type=int, default=None)
+    parser.add_argument("--batch",         action="store_true",
+                        help="非交互模式：自动接受每轮，自动落盘，不等待用户输入")
+    parser.add_argument("--out-file",      default=None,
+                        help="指定输出文件路径（batch 模式推荐填写；不填则用自动时间戳命名）")
     args = parser.parse_args()
 
     from rich.console import Console
@@ -264,18 +290,28 @@ def main() -> int:
         console.print("[red]ERROR: --context-file 与 --raw-prompt-file 只能二选一[/red]")
         return 1
     raw_prompt_mode = bool(args.raw_prompt_file)
+    if args.batch:
+        console.print("[cyan]  [BATCH] 非交互模式：自动接受每轮，完成后自动落盘。[/cyan]")
+        if not args.context_file and not args.raw_prompt_file:
+            console.print("[red]ERROR: batch 模式下必须提供 --context-file 或 --raw-prompt-file（不支持交互粘贴）[/red]")
+            return 1
 
     # ── 0. 前置检查 ───────────────────────────────────────────────────────────
-    adapter_path = Path(args.adapter)
-    looks_local_path = (
-        "\\" in args.adapter
-        or args.adapter.startswith((".", "/"))
-        or re.match(r"^[A-Za-z]:", args.adapter)
-        or args.adapter.split("/", 1)[0] in {"outputs", "models"}
-    )
-    if looks_local_path and not adapter_path.exists():
-        console.print(f"[red]ERROR: adapter 目录不存在: {adapter_path}[/red]")
-        return 1
+    if args.adapter:
+        adapter_path = Path(args.adapter)
+        looks_local_path = (
+            "\\" in args.adapter
+            or args.adapter.startswith((".", "/"))
+            or re.match(r"^[A-Za-z]:", args.adapter)
+            or args.adapter.split("/", 1)[0] in {"outputs", "models"}
+        )
+        if looks_local_path and not adapter_path.exists():
+            console.print(f"[red]ERROR: adapter 目录不存在: {adapter_path}[/red]")
+            return 1
+        _model_name = str(adapter_path if adapter_path.exists() else args.adapter)
+    else:
+        _model_name = args.base_model
+        console.print(f"[dim]  纯基座模式（无 adapter）: {_model_name}[/dim]")
 
     import torch
     if not torch.cuda.is_available():
@@ -301,13 +337,14 @@ def main() -> int:
         console.print(f"[dim]  {len(retriever._docs)} bible docs indexed[/dim]")
 
     # ── 2. 加载模型 + adapter ─────────────────────────────────────────────────
-    console.print(f"\n[bold]--- 加载模型 + adapter ---[/bold]")
-    console.print(f"[dim]  {args.adapter}  max_seq_length={args.max_seq_length}[/dim]")
+    _load_label = "加载模型（纯基座）" if not args.adapter else "加载模型 + adapter"
+    console.print(f"\n[bold]--- {_load_label} ---[/bold]")
+    console.print(f"[dim]  {_model_name}  max_seq_length={args.max_seq_length}[/dim]")
 
     from unsloth import FastLanguageModel
     with console.status("[green]Loading (4-bit)…[/green]", spinner="dots"):
         model, tokenizer = FastLanguageModel.from_pretrained(
-            model_name=str(adapter_path if adapter_path.exists() else args.adapter),
+            model_name=_model_name,
             max_seq_length=args.max_seq_length,
             load_in_4bit=True,
             dtype=None,
@@ -375,6 +412,9 @@ def main() -> int:
             title="[red bold]初始上文内部重复警告[/red bold]",
             border_style="red",
         ))
+        if args.batch:
+            console.print("[red]  [BATCH] 初始上文有内部重复，batch 模式下自动终止（不覆盖污染输入）。[/red]")
+            return 1
         resp = input("继续使用此上文？(y/N)：").strip().lower()
         if resp != "y":
             console.print("[yellow]已取消。请提供干净的初始上文重新运行。[/yellow]")
@@ -385,10 +425,11 @@ def main() -> int:
     # ── 5. 首轮 prompt 预览（自动展示，供用户确认上文干净）─────────────────
     console.print("\n[bold]--- 首轮 Prompt 结构（生成前确认）---[/bold]")
     if raw_prompt_mode:
-        first_prompt = initial_context[-MAX_RECENT_CHARS:]
-        console.print(Panel(first_prompt, title="[yellow]RAW PROMPT[/yellow]",
+        _raw_anchor = initial_context[-MAX_RECENT_CHARS:]
+        first_prompt = RAW_PROMPT_TEMPLATE.format(text=_raw_anchor)
+        console.print(Panel(first_prompt, title="[yellow]RAW PROMPT（指令模板 + anchor）[/yellow]",
                             border_style="yellow", expand=True))
-        console.print(f"[dim]  Raw prompt chars: {len(first_prompt)} / {len(initial_context)}[/dim]")
+        console.print(f"[dim]  Raw prompt chars: {len(first_prompt)} (anchor: {len(_raw_anchor)}c)[/dim]")
     else:
         retrieval_init = retriever.retrieve(
             initial_context[-MAX_RECENT_CHARS:], max_chapter=None
@@ -404,7 +445,10 @@ def main() -> int:
         msgs_display = [m for m in msgs_init if m["role"] != "assistant"]
         _show_prompt_panels(msgs_display, retrieval_init, console)
 
-    input("\n按 Enter 开始生成，Ctrl+C 取消：")
+    if not args.batch:
+        input("\n按 Enter 开始生成，Ctrl+C 取消：")
+    else:
+        console.print("[dim]  [BATCH] 自动开始生成…[/dim]")
 
     # ── 6. 交互循环 ───────────────────────────────────────────────────────────
     # 预种：用初始上文段落初始化 seen_keys，防止模型重复初始内容
@@ -431,7 +475,7 @@ def main() -> int:
         recent_text = accumulated_text[-MAX_RECENT_CHARS:]
         if raw_prompt_mode:
             retrieval = {}
-            msgs_gen = [{"role": "user", "content": recent_text}]
+            msgs_gen = [{"role": "user", "content": RAW_PROMPT_TEMPLATE.format(text=recent_text)}]
         else:
             retrieval = retriever.retrieve(recent_text, max_chapter=None)
             messages = build_prompt(
@@ -472,6 +516,16 @@ def main() -> int:
             console.print("[yellow]  [WARN] 空生成，提前停止。[/yellow]")
             break
 
+        # batch 模式 VRAM 安全门（超 7.8 GB 中止本格，已累积内容仍落盘）
+        if args.batch:
+            _vram_peak = torch.cuda.max_memory_allocated() / 1024**3
+            if _vram_peak > 7.8:
+                console.print(
+                    f"[red bold]  [BATCH] VRAM {_vram_peak:.3f} GB > 7.8 GB，"
+                    f"超限中止本格，已累积 {total_new_chars}c 将落盘。[/red bold]"
+                )
+                break
+
         # 去重
         kept_text, was_truncated, was_skipped = _dedup_truncate(new_text, seen_para_keys)
         if was_truncated:
@@ -482,9 +536,10 @@ def main() -> int:
         if was_skipped:
             skip_rounds += 1
             console.print("[dim]  [SKIP] 整轮均重复，跳过。[/dim]")
-            cmd = input("  [r=重新生成 / Enter=跳过此轮 / q=退出]：").strip().lower()
-            if cmd == "q":
-                break
+            if not args.batch:
+                cmd = input("  [r=重新生成 / Enter=跳过此轮 / q=退出]：").strip().lower()
+                if cmd == "q":
+                    break
             continue
 
         text_to_show = kept_text if was_truncated else new_text
@@ -493,9 +548,12 @@ def main() -> int:
 
         # ── 命令循环 ──────────────────────────────────────────────────────────
         while True:
-            cmd = input(
-                "  [Enter=接受 / 文字=替换 / /reject /retry /context /save /help /quit]："
-            ).strip()
+            if args.batch:
+                cmd = ""  # 自动接受
+            else:
+                cmd = input(
+                    "  [Enter=接受 / 文字=替换 / /reject /retry /context /save /help /quit]："
+                ).strip()
 
             if cmd == "":
                 accumulated_text += "\n\n" + text_to_show
@@ -541,8 +599,8 @@ def main() -> int:
                 prefix = "/retry" if cmd.startswith("/retry") else "/重试"
                 instr  = cmd[len(prefix):].strip()
                 if raw_prompt_mode:
-                    retry_text = recent_text if not instr else recent_text + "\n\n" + instr
-                    retry_msgs = [{"role": "user", "content": retry_text}]
+                    retry_base = recent_text if not instr else recent_text + "\n\n" + instr
+                    retry_msgs = [{"role": "user", "content": RAW_PROMPT_TEMPLATE.format(text=retry_base)}]
                 else:
                     retry_msgs = build_prompt(
                         recent_text=recent_text, summary="",
@@ -587,9 +645,12 @@ def main() -> int:
                 continue
 
             elif cmd in ("/quit", "q", "exit"):
-                if all_new_texts and input("  保存草稿？(y/N)：").strip().lower() == "y":
-                    saved_path = _save_draft(all_new_texts)
-                    console.print(f"[green]  [已保存] {saved_path}[/green]")
+                if all_new_texts:
+                    if input("  保存草稿？(y/N)：").strip().lower() == "y":
+                        saved_path = _save_draft(all_new_texts)
+                        console.print(f"[green]  [已保存] {saved_path}[/green]")
+                    else:
+                        console.print("[yellow]  [警告] 退出时未保存，本轮生成已丢弃。[/yellow]")
                 total_new_chars = sum(len(t) for t in all_new_texts)
                 _print_final_summary(console, rnd, total_new_chars,
                                      truncation_rounds, skip_rounds, saved_path)
@@ -603,10 +664,21 @@ def main() -> int:
             )
             break
 
-    # 退出后自动保存（如果还没保存）
+    # 退出后保存
     if all_new_texts and not saved_path:
-        saved_path = _save_draft(all_new_texts)
-        console.print(f"\n[green]草稿已保存: {saved_path}[/green]")
+        if args.batch:
+            # batch 模式：强制落盘，路径由 --out-file 指定或自动时间戳
+            if args.out_file:
+                out_p = Path(args.out_file)
+                out_p.parent.mkdir(parents=True, exist_ok=True)
+                out_p.write_text("\n\n".join(all_new_texts), encoding="utf-8")
+                saved_path = str(out_p)
+            else:
+                saved_path = _save_draft(all_new_texts)
+            console.print(f"\n[green][BATCH] 候选已落盘: {saved_path}[/green]")
+        else:
+            saved_path = _save_draft(all_new_texts)
+            console.print(f"\n[green]草稿已保存: {saved_path}[/green]")
 
     total_new_chars = sum(len(t) for t in all_new_texts)
     _print_final_summary(console, len(all_new_texts), total_new_chars,

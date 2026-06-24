@@ -2,7 +2,7 @@
 
 _最后更新：2026-06-24_
 
-本文档记录当前小说续写项目的目录职责、运行链路、路径约定和阶段边界。当前运行基线是阶段3完成后、系统A时序过滤落地后的状态：Ollama + Qwen3-8B 非思考模式、补全式 prompt、story_bible 时序过滤检索、前情提要注入、输出清洗与去重。阶段4 QLoRA 已验证 v2 小样本链路有效，但 v3（novel2 合并）和 v4（57 条风丝引扩样）均未通过最终评测。当前主线是先回退或重规划 QLoRA，让基础续写稳定到至少接近 v2；随后加轻量检索 debug；再做 System B 记忆闭环 MVP。
+本文档记录当前小说续写项目的目录职责、运行链路、路径约定和阶段边界。当前生产运行基线是阶段3完成后、系统A时序过滤落地后的状态：Ollama + Qwen3-8B 非思考模式、补全式 prompt、story_bible 时序过滤检索、前情提要注入、输出清洗与去重。阶段4 QLoRA 已验证 v2 小样本链路有效，但 v3（novel2 合并）和 v4（57 条风丝引扩样）均未通过最终评测。当前 Stage 0 重锚评测暂停在 `adapter_cli.py` raw prompt 构造问题：必须先修 raw 模式续写引导，再重跑 `v2 × ch1_clean × seed1101`，判别通过前禁止 fan-out。
 
 核心原则：
 
@@ -54,7 +54,7 @@ LOCAL-LLM-NOVEL/
 │  ├─ train_qlora.py           # 阶段4：训练态显存实测与小样本 QLoRA 训练
 │  ├─ generate_lora.py         # 阶段4：用 LoRA adapter 生成候选文本供评测
 │  ├─ generate_lora_multi.py   # 阶段4：多轮 LoRA 生成，复用真实推理 prompt 链路
-│  ├─ adapter_cli.py           # 阶段4：独立 LoRA adapter 续写 CLI，避免 Web 会话污染
+│  ├─ adapter_cli.py           # 阶段4：独立 LoRA adapter 续写 CLI；支持 raw-prompt/seed，用于 Stage 0 重锚
 │  └─ export_gguf.py           # 阶段4占位：GGUF 导出
 ├─ tests/
 │  └─ fixtures/eval_style/     # 阶段3固定假文本回归样本，不含真实小说原文
@@ -259,6 +259,8 @@ python scripts/eval_draft.py --config config.yaml --candidate outputs/draft_xxx.
 
 JSON 顶层字段（稳定）：`meta` / `inputs` / `reference_stats` / `candidate_stats` / `segmentation` / `repetition` / `contamination` / `diff` / `summary` / `style_score`
 
+Stage 0 固定 reference：`data/raw/风丝引_原文.txt`。由于 `data/raw/` 下存在多个 txt，Stage 0 的 `scripts/eval_draft.py` 调用必须显式传 `--reference data/raw/风丝引_原文.txt`，中途不得更换，否则 style_score 不可比。
+
 回归测试：
 
 ```powershell
@@ -275,7 +277,7 @@ python _test_eval_style.py
 - v2：novel1 20 条样本，5 optimizer steps，`outputs/qlora_run_v2/`，style_score `60.48`，小样本链路通过。
 - v3：merged 544 条样本，136 optimizer steps，`outputs/qlora_run_v3/`，style_score `46.05`，round2/3 严重崩溃，novel2 合并线已放弃。
 - v4：风丝引 57 条样本，45 optimizer steps，`outputs/qlora_run_v4/`，训练 loss 健康但评测未通过。坏触发点 style_score `39.41`，干净 ch1 起点 style_score `48.7361`，仍低于基线和 v2。
-- 当前主线：停止 v3 repeat，不导出 v4；先回退或重规划 QLoRA，让基础续写至少接近 v2。
+- 当前主线：停止 v3 repeat，不导出 v4；先修 Stage 0 raw prompt 构造，重锚 adapter_cli 三元组，再决定 QLoRA 是数据重构还是旋钮单变量阶梯。
 
 阶段4数据流：
 
@@ -317,13 +319,59 @@ evaluate:
 
 - v3 已明确放弃，不再做 repeat2 或相关评测。
 - v4 不是单点叶欢线问题；排除“凰后/凤倾汐 -> 叶欢”触发后，干净 ch1 起点仍低于基线并出现格式失控、跳剧情和现代感词汇。
-- 下一步应先做训练/评测实验管理：固定 reference、prompt、采样参数、候选长度区间；每个 adapter 至少 repeat 2-3 次；记录 seed 或独立运行编号；加入标点密度、平均句长、最长句 quick eval。
+- Stage 0 当前不是 fan-out 阶段：纯基座和 v2 在 `ch1_clean` seed1101 raw 模式下都退化成 instruct 助手腔，因此已判定为 raw prompt 构造问题。
+- 下一步应先修 raw prompt，让 raw 模式也明确“从断点直接续写小说正文，不要标题/分析/解释/写作建议/提问”；修复后只重跑 `v2 × ch1_clean × seed1101` 判别。
+- 判别通过后再做训练/评测实验管理：固定 reference、prompt、采样参数、候选长度区间；每个 adapter 至少 repeat 2-3 次；记录 seed 或独立运行编号；加入标点密度、平均句长、最长句 quick eval。
 
 验收边界：
 
 - QLoRA 负责文风、节奏、表达习惯和大纲遵循。
 - QLoRA 不负责动态记住新角色；记忆缺口由 `story_bible` / System B 单独验收。
 - 微调评估时，不把人物记忆缺失当作文风微调失败；也不把文风指标失败归因给记忆系统。
+
+## Stage 0 Adapter CLI Raw Evaluation
+
+Stage 0 的 `adapter_cli.py --raw-prompt-file` 管线不是生产 prompt；它故意跳过 Retriever / `build_prompt`，用来隔离 adapter 贡献。它的唯一可归因比较对象是纯基座 / v2 / v4 三元组内部。
+
+当前已接受能力：
+
+- `--raw-prompt-file <txt>`：读取完整 anchor 文本，raw 模式不走 retrieval。
+- `--seed <int>`：在 generate 前调用 `transformers.set_seed(seed)`。
+- `MAX_RECENT_CHARS=800`：raw/adapter_cli Stage 0 口径，与 v4 700c 训练 context 更接近。
+- 采样参数读 `config.yaml`，但 HF generate 实际只生效 `temperature/top_p/top_k/repetition_penalty`。
+
+冻结评测资产：
+
+```text
+outputs/eval_anchors/
+├─ ch1_clean.txt
+├─ ch58_bad_trigger.txt
+├─ mid_court_dialogue.txt
+├─ yehuan_controlled.txt
+└─ anchors_manifest.json
+```
+
+4 个 anchor 都由 `anchors_manifest.json` 记录 sha256；任何 Stage 0 运行前先校验 sha。anchor 文件是冻结资产，不应改字、重选或追加。
+
+当前 raw prompt 阻塞：
+
+```text
+<|im_start|>user
+[800 字 anchor 原文]
+<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+```
+
+该结构缺少续写任务约束，导致 instruct 模型把 anchor 当成待点评/扩写素材。已验证纯基座和 v2 都在 `ch1_clean` seed1101 下输出说明文、标题、Markdown 菜单和写作建议。因此当前架构边界是：先修 raw prompt 构造，再继续 Stage 0；判别通过前不要运行完整 3×4×2。
+
+运行环境注意：
+
+- 默认 HF cache `C:\Users\14390\.cache\huggingface\hub` 对 Codex sandbox 只有读权限，Unsloth import 会卡在 cache writable probe。
+- Stage 0 可使用进程级 proxy：`outputs/hf_stage0_proxy/`，并设置 `HF_HOME/HF_HUB_CACHE/HF_XET_CACHE`。该目录内的 base model cache 用 junction 指向真实 HF cache，避免复制 16GB 权重。
+- 这只是运行规避，不是项目架构依赖，不应提交 `outputs/` 内容。
 
 ## Story Bible Build
 

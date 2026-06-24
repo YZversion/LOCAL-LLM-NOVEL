@@ -34,7 +34,8 @@ _最后更新：2026-06-24_
 [✓] 阶段4    小样本 QLoRA 验证链路（v2：style_score 60.48 > 基线 50.92）
 [✗] 阶段4    v3（novel2 合并 544 条）放弃，角色错乱+分布不兼容，不再追究根因
 [✗] 阶段4    v4（风丝引 57 条）训练完成但评测未通过，基础续写不稳定
-[→] 阶段4    回退或重规划 QLoRA，让基础续写至少接近 v2
+[→] 阶段4    Stage 0 重锚评测：先修 adapter_cli raw prompt 构造
+[ ] 阶段4    修好 raw prompt 后再 fan-out 纯基座/v2/v4 × 4 anchors × 2 repeats
 [ ] Debug    retrieval_manifest.json（检索注入可视化，System B 前置）
 [ ] 系统B    kg.json -> Markdown cards -> BM25（待基础生成稳定后）
 [ ] 阶段5    向量 RAG（按需）
@@ -89,10 +90,43 @@ _最后更新：2026-06-24_
 
 ### 当前下一步
 
-1. 先回退或重规划 QLoRA，让基础续写稳定到至少接近 v2（style_score `60.48`）。
-2. 同时可以先加轻量 debug：`outputs/debug/retrieval_manifest.json`，记录检索注入来源、原因、槽位占用和 temporal filter 排除数量。
-3. 再做 System B MVP：`data/story_bible/kg.json` 作为事实源，Markdown cards 只是给现有 Retriever 读取的投影层。
-4. 等生成模型稳定后，再让 System B 承担长篇记忆闭环。
+1. 先修 `pipeline/adapter_cli.py` 的 raw prompt 构造：raw 模式仍不走 retrieval，但必须明确要求模型从断点直接续写小说正文，禁止标题、分析、解释、写作建议和向用户提问。
+2. 修复后只重跑 `v2 × ch1_clean × seed1101` 判别实验；若 v2 恢复正常正文续写，再用固定 reference 跑 `eval_draft.py`。
+3. 判别通过后才进入 Stage 0 fan-out：纯基座/v2/v4 × 4 anchors × 2 repeats。只比较 adapter_cli 三元组内部，不和 Ollama baseline 求差。
+4. Stage 0 重锚完成后，再决定 QLoRA 是数据重构还是旋钮单变量阶梯。
+5. 同时可以先加轻量 debug：`outputs/debug/retrieval_manifest.json`，记录检索注入来源、原因、槽位占用和 temporal filter 排除数量。
+6. 基础生成稳定后，再做 System B MVP：`data/story_bible/kg.json` 作为事实源，Markdown cards 只是给现有 Retriever 读取的投影层。
+
+### Stage 0 重锚评测现状
+
+**冻结资产**：
+- Anchors：`outputs/eval_anchors/` 下 4 个 txt + `anchors_manifest.json` sha 锁。已多次校验一致，不得重选或修改。
+- `ch1_clean`：ch1，800c，训练区间外，泛化点。
+- `ch58_bad_trigger`：ch58，790c，训练区间内，结尾靠近“凰后/凤倾汐”坏触发点。
+- `mid_court_dialogue`：ch56，798c，训练区间内，宫廷对白。
+- `yehuan_controlled`：ch35，761c，训练区间内，叶欢线控制点，不含金丹/凝气/昆仑等泛玄幻词。
+
+**adapter_cli 状态**：
+- 已支持 `--raw-prompt-file`，raw 模式跳过 Retriever / `build_prompt`。
+- 已支持 `--seed`，传入后调用 `transformers.set_seed(seed)`。
+- 当前安全推理口径：`--max-seq-length 4096` + `MAX_RECENT_CHARS=800`。
+- 实际生效采样参数只有 `temperature/top_p/top_k/repetition_penalty`，均来自 `config.yaml`。
+
+**评测 reference 锁定**：
+- `scripts/eval_draft.py` 必须显式传：
+  `--reference data/raw/风丝引_原文.txt`
+- 该 reference 是 Stage 0 的固定参照系，中途不得更换。
+- 上一轮纯基座 smoke 候选 `outputs/adapter_candidate_20260624_1359.txt` 用该 reference 已能评测，结果 `style_score=60.8257`、`repetition_risk=medium`、`contamination_risk=low`。该分数不能作为可用性结论，因为候选文本是助手腔退化输出。
+
+**当前阻塞：raw prompt 构造问题**：
+- 纯基座 `ch1_clean` seed1101 raw smoke 能生成，显存安全（加载 peak 5.77GB，生成 peak 约 6.06GB），但输出退化成“这是一段...”、标题、Markdown 菜单和写作建议。
+- 同一 `ch1_clean`、同 seed1101、挂 v2 adapter 后也退化成助手腔/说明文（含 `**《浮生一梦》**` 和“如果需要继续发展剧情...”）。
+- 因 v2 也退化，判定为 raw prompt 构造问题，不是纯基座固有行为。当前 raw prompt 实际结构只是把 anchor 当 user message，随后接 assistant 起始标记，缺少续写任务约束。
+- 判别通过前禁止跑完整 3×4×2 fan-out；否则三元组都会被同一个 prompt 构造缺陷污染。
+
+**运行环境规避**：
+- 默认 HF cache `C:\Users\14390\.cache\huggingface\hub` 对 Codex sandbox 只有读权限，Unsloth import 会卡在 cache writable probe。
+- Stage 0 使用进程级 proxy：`outputs/hf_stage0_proxy/`。设置 `HF_HOME/HF_HUB_CACHE/HF_XET_CACHE` 到该目录后，repo id 可离线解析；其中 base model 目录用 junction 指向真实 HF cache。
 
 ### 已知限制
 

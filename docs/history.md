@@ -199,3 +199,37 @@ python scripts\eval_draft.py --config config.yaml --candidate <candidate.txt>
 2. 同时可先加轻量 debug：`outputs/debug/retrieval_manifest.json`。
 3. 再做 System B MVP：`kg.json -> Markdown cards -> BM25`。
 4. 等生成模型稳定后，再让 System B 承担长篇记忆闭环。
+
+---
+
+## 阶段4 Stage 0 重锚评测准备与 raw prompt 阻塞（2026-06-24）
+
+### 固定评测资产
+
+- 已创建并冻结 `outputs/eval_anchors/` 下 4 个 anchor：`ch1_clean`、`ch58_bad_trigger`、`mid_court_dialogue`、`yehuan_controlled`。
+- `anchors_manifest.json` 记录每个 anchor 的 source chapter、register、训练区间标记和 sha256；后续运行前必须校验 sha，不得重选或修改 anchor。
+- `pipeline/adapter_cli.py` 已具备 Stage 0 raw 管线能力：`--raw-prompt-file`、`--seed`、`MAX_RECENT_CHARS=800`，raw 模式跳过 Retriever / `build_prompt`。
+- Stage 0 评测 reference 锁定为 `data/raw/风丝引_原文.txt`。由于 `data/raw/` 下有多个 txt，`scripts/eval_draft.py` 必须显式传 `--reference data/raw/风丝引_原文.txt`。
+
+### HF cache 运行规避
+
+- 诊断发现 Codex sandbox 用户对默认 HF cache `C:\Users\14390\.cache\huggingface\hub` 只有读权限。
+- Unsloth import 会在 `unsloth_zoo/hf_cache.py::_is_writable()` 中用 `tempfile.NamedTemporaryFile(dir=hub_cache)` 探测可写性，因此会卡在默认 cache。
+- 用进程级 `outputs/hf_stage0_proxy/` 作为 `HF_HOME/HF_HUB_CACHE/HF_XET_CACHE` 后，repo id 可离线解析；base model 目录用 junction 指向真实 HF cache，避免复制 16GB 权重。
+- 最小加载诊断通过：`huihui-ai/Huihui-Qwen3-8B-abliterated-v2` 可由 `.venv-train` / Unsloth 离线加载 4-bit，加载约 15s，VRAM peak 约 5.77GB。
+
+### smoke 与判别实验
+
+- 纯基座 × `ch1_clean` × seed1101 raw smoke：
+  - 生成成功，候选 `outputs/adapter_candidate_20260624_1359.txt`，3 轮，2565c。
+  - 显存安全：加载 peak 5.77GB，生成 peak 约 6.06GB。
+  - 加固定 reference 后 eval 成功：`style_score=60.8257`、`repetition_risk=medium`、`contamination_risk=low`。
+  - 人工通读失败：候选明显是 instruct 助手腔，出现“这是一段...”、标题、Markdown 菜单和写作建议。
+- v2 adapter × `ch1_clean` × seed1101 raw 判别：
+  - 只跑 1 轮用于判别。
+  - 同样输出说明文/助手腔，开头“这是一段充满诗意与情感的画面描写...”，含 `**《浮生一梦》**`，结尾“如果需要继续发展剧情...”。
+  - 结论：退化不是纯基座固有行为，而是 raw prompt 构造问题。
+
+### 当前停点
+
+Stage 0 暂停，不允许 fan-out 到纯基座/v2/v4 × 4 anchors × 2 repeats。下一步必须先最小修改 raw prompt 构造：raw 模式仍不走 retrieval，但要明确要求模型从断点直接续写小说正文，禁止标题、分析、解释、写作建议和向用户提问。修复后先重跑 `v2 × ch1_clean × seed1101`；只有 v2 恢复正文续写后，才继续 Stage 0 完整评测。
