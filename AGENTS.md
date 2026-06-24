@@ -1,6 +1,6 @@
 # 本地小说续写助手 — Agent 工作规程
 
-_最后更新：2026-06-24_
+_最后更新：2026-06-23_
 
 > 每次新对话开始时，先读此文件，再读 `docs/current_state.md`，再动手。
 
@@ -16,27 +16,27 @@ _最后更新：2026-06-24_
 
 ---
 
-## 当前阶段：阶段4 QLoRA 重规划
+## 当前阶段：阶段4 QLoRA 微调
 
 详细环境/实验记录见 `docs/phase4_qlora.md`，项目全局状态见 `docs/current_state.md`。
 
-**当前任务：先回退或重规划 QLoRA，让基础续写稳定到至少接近 v2；随后加轻量检索 debug；再做 System B MVP。**
+**当前任务：确认 num_train_epochs 和 warmup_steps，然后用 57 条风丝引样本训练 v4 adapter。**
 
-已确认决策：
-- v3（novel2 合并 544 条）已明确放弃：round2/3 严重崩溃（角色错乱 + 区块链/AI 等技术术语），novel2 分布与风丝引不兼容，不再追究根因，不再做 repeat 诊断。
-- v4 已完整训练完成：57 条风丝引样本（ch2-58），`context_chars=700`，`max_seq_length=1536`，`num_train_epochs=3`，`warmup_steps=2`，`UNSLOTH_CE_LOSS_TARGET_GB=0.5`，adapter 保存在 `outputs/qlora_run_v4/`。
-- v4 训练曲线健康但评测未通过：loss 从 3.758 降到 2.223，显存峰值约 7.38GB；生成质量仍不稳定，不能导出或接生产。
+已确认决策（v3 方向已放弃）：
+- v3（novel2 合并 544 条）放弃：round2/3 严重崩溃（角色错乱 + 技术术语），根因为 novel2 分布与风丝引不兼容，不再追究。
+- 新方向：只用风丝引自身数据，从 20 条（ch2-21）扩充至 57 条（ch2-58）。
+- 补写两张新角色卡：宁楚珣（revealed_in=42）、大理相（revealed_in=52），时序验证全部通过。
 
-v4 已知评测结论：
-- 坏触发点评测：`outputs/adapter_candidate_v4_eval.txt` / `outputs/v4_eval_result.json`，style_score `39.41`。从 ch58 附近“凰后/凤倾汐”上文续写时触发“凰后 -> 叶欢”强关联，切入叶欢修仙子线，并用训练数据外的通用玄幻词汇（金丹/凝气/昆仑山脉等）填充。
-- 干净起点复测：`outputs/adapter_candidate_20260624_1114.txt` / `outputs/v4_ch1_clean_eval.json`，style_score `48.7361`，仍低于基线 `50.92` 和 v2 `60.48`。人工核查发现标题样文本、擅自跳剧情、乱加人物、现代感词汇等问题。
-- 结论：v4 不是单点叶欢线问题，而是当前 57 条 / 700c / 1536 / 3epoch 配置整体不稳定。
+当前训练数据（v4）：
+- 57 条，`data/processed/train_samples_full_57.jsonl`（ch2-58 风丝引原文）。
+- 参数：`context_chars=700`，`completion_chars=200`，`bible_top_k=2`，`bible_max_chars=250`，`prior_max_chars=120`。
+- Token 分布：min=1335t，max=1460t，mean=1398t，0 条超过 1536t 上限。
+- `_test_train_samples.py`：57/57 ALL PASS（含宁楚珣 ch42/ch43 边界、大理相 ch52 边界）。
 
-当前优先级：
-1. **QLoRA 回退或重规划**：以 v2 `style_score 60.48` 为可用锚点，先让基础续写至少接近 v2，再考虑 GGUF 或生产接入。
-2. **轻量检索 debug**：实现 `outputs/debug/retrieval_manifest.json`，记录 target_chapter、max_chapter、注入文件、命中原因、槽位字符/Token 占用、temporal filter 排除数量。这一步风险低、收益高，可先于 System B。
-3. **System B MVP**：等基础生成稳定后，再做 `kg.json -> Markdown cards -> BM25`，不要现在上复杂 GraphRAG/LightRAG。
-4. **长篇记忆闭环**：模型稳定后，再让 System B 承担章节事实写回、实体状态和剧情线 consolidation。
+当前卡点：
+- `pipeline/train_qlora.py` 已更新：`MAX_SEQ_LENGTH=1536`，`--samples` 默认指向 `train_samples_full_57.jsonl`，`--full-run` 输出目录为 `outputs/qlora_run_v4/`。
+- `WARMUP_STEPS=2`，`NUM_TRAIN_EPOCHS=3` 为建议值（TBD），等用户确认后开始训练。
+- 建议在 full-run 前用新 57 条 700c 样本再跑一次 1536 显存探针（当前探针用的是旧 60c 数据，实际序列最长 942t；新数据最长 1460t，VRAM 会略高，估算 ~7.3GB）。
 
 ## 已知限制 / 设计权衡
 

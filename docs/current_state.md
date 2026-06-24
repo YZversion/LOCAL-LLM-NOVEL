@@ -1,6 +1,6 @@
 # 项目当前状态
 
-_最后更新：2026-06-23_
+_最后更新：2026-06-24_
 
 ---
 
@@ -33,8 +33,10 @@ _最后更新：2026-06-23_
 [✓] 系统A数据  chapter_summaries.md ch1-58 补全（2026-06-17）
 [✓] 阶段4    小样本 QLoRA 验证链路（v2：style_score 60.48 > 基线 50.92）
 [✗] 阶段4    v3（novel2 合并 544 条）放弃，角色错乱+分布不兼容，不再追究根因
-[→] 阶段4    v4 训练完成（outputs/qlora_run_v4/），待评测（style_score 目标 > 60.48）
-[ ] 系统B    知识图谱 + story_bible 动态写回（延后）
+[✗] 阶段4    v4（风丝引 57 条）训练完成但评测未通过，基础续写不稳定
+[→] 阶段4    回退或重规划 QLoRA，让基础续写至少接近 v2
+[ ] Debug    retrieval_manifest.json（检索注入可视化，System B 前置）
+[ ] 系统B    kg.json -> Markdown cards -> BM25（待基础生成稳定后）
 [ ] 阶段5    向量 RAG（按需）
 ```
 
@@ -55,7 +57,7 @@ _最后更新：2026-06-23_
 - v3 首次评测：style_score `46.05`（低于 v2 和基线）；后续 round2/3 生成严重崩溃（角色错乱+混入技术术语）。
 - **放弃决策**：novel2 内容分布与风丝引不兼容，根因不再追究，合并数据线彻底放弃。
 
-### v4 准备中（当前主线）
+### v4（已训练，未通过）
 
 **训练数据**：
 - 数据集：`data/processed/train_samples_full_57.jsonl`，57 条，ch2-58，纯风丝引原文。
@@ -79,6 +81,18 @@ _最后更新：2026-06-23_
 **显存状态**：
 - v4 探针（700c 数据，序列最长 1460t）：峰值 **7.38 GB** ✅（UNSLOTH_CE_LOSS_TARGET_GB=0.5）
 - v4 full-run：峰值同探针，**7.38 GB** ✅，adapter 已保存。
+
+**评测结论**：
+- 坏触发点评测：`outputs/adapter_candidate_v4_eval.txt` / `outputs/v4_eval_result.json`，style_score `39.41`。从 ch58 附近“凰后/凤倾汐”上文续写时触发“凰后 -> 叶欢”强关联，切入叶欢修仙子线，并用训练数据外的通用玄幻词汇（金丹/凝气/昆仑山脉等）填充。
+- 干净 ch1 起点复测：`outputs/adapter_candidate_20260624_1114.txt` / `outputs/v4_ch1_clean_eval.json`，style_score `48.7361`，仍低于基线 `50.92` 和 v2 `60.48`。人工核查发现标题样文本、擅自跳剧情、乱加人物、现代感词汇等问题。
+- **结论**：v4 当前配置整体不稳定，不能导出 GGUF 或接生产；下一步不是局部修叶欢线，而是回退或重规划 QLoRA。
+
+### 当前下一步
+
+1. 先回退或重规划 QLoRA，让基础续写稳定到至少接近 v2（style_score `60.48`）。
+2. 同时可以先加轻量 debug：`outputs/debug/retrieval_manifest.json`，记录检索注入来源、原因、槽位占用和 temporal filter 排除数量。
+3. 再做 System B MVP：`data/story_bible/kg.json` 作为事实源，Markdown cards 只是给现有 Retriever 读取的投影层。
+4. 等生成模型稳定后，再让 System B 承担长篇记忆闭环。
 
 ### 已知限制
 
@@ -114,15 +128,18 @@ and (valid_to is None or valid_to >= max_chapter)
 
 ---
 
-## 系统 B（知识图谱，延后）
+## 系统 B（知识图谱，待基础生成稳定后）
 
 核心链路（待实现）：
 
 ```text
-续写第 N 章 -> kg_extract.py -> kg.json -> kg_render.py -> .md 卡片 -> 第N+1章可检索
+已接受章节文本 -> kg_extract.py -> kg_update.py -> data/story_bible/kg.json
+-> kg_render.py -> Markdown cards -> 下一章 Retriever 用 BM25 + frontmatter 检索
 ```
 
 待实现脚本：`kg_extract.py` / `kg_update.py` / `kg_render.py` / `update_kg.py`
+
+第一版只做朴素可控闭环，不做复杂 GraphRAG。`kg.json` 是事实源，Markdown 是投影层，方便未来升级 vector/KG 时不推翻数据。
 
 已补充角色（手写卡）：宁楚珣（ch42）、大理相（ch52）。
 接受 bible=[] 的角色（出场 1 章、影响有限）：洛老太太、洛安、老太监、余挚。

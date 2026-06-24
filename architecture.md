@@ -1,8 +1,8 @@
 # 本地小说续写助手架构
 
-_最后更新：2026-06-23_
+_最后更新：2026-06-24_
 
-本文档记录当前小说续写项目的目录职责、运行链路、路径约定和阶段边界。当前运行基线是阶段3完成后、系统A时序过滤落地后的状态：Ollama + Qwen3-8B 非思考模式、补全式 prompt、story_bible 时序过滤检索、前情提要注入、输出清洗与去重。当前训练主线处于阶段4 QLoRA v4 训练前准备：v3（novel2 合并 544 条）已放弃，改为只用风丝引 57 条样本（ch2-58，context_chars=700，max_seq_length=1536）训练 v4。
+本文档记录当前小说续写项目的目录职责、运行链路、路径约定和阶段边界。当前运行基线是阶段3完成后、系统A时序过滤落地后的状态：Ollama + Qwen3-8B 非思考模式、补全式 prompt、story_bible 时序过滤检索、前情提要注入、输出清洗与去重。阶段4 QLoRA 已验证 v2 小样本链路有效，但 v3（novel2 合并）和 v4（57 条风丝引扩样）均未通过最终评测。当前主线是先回退或重规划 QLoRA，让基础续写稳定到至少接近 v2；随后加轻量检索 debug；再做 System B 记忆闭环 MVP。
 
 核心原则：
 
@@ -54,6 +54,7 @@ LOCAL-LLM-NOVEL/
 │  ├─ train_qlora.py           # 阶段4：训练态显存实测与小样本 QLoRA 训练
 │  ├─ generate_lora.py         # 阶段4：用 LoRA adapter 生成候选文本供评测
 │  ├─ generate_lora_multi.py   # 阶段4：多轮 LoRA 生成，复用真实推理 prompt 链路
+│  ├─ adapter_cli.py           # 阶段4：独立 LoRA adapter 续写 CLI，避免 Web 会话污染
 │  └─ export_gguf.py           # 阶段4占位：GGUF 导出
 ├─ tests/
 │  └─ fixtures/eval_style/     # 阶段3固定假文本回归样本，不含真实小说原文
@@ -176,7 +177,22 @@ _strip_think() → _dedup_output()
 
 `target_chapter` 不提供时，`max_chap=None`，时序过滤不启用，行为与旧版一致。
 
-`outputs/debug/` 会保存最近一次请求、prompt 和响应拆分结果，用于排查 prompt、thinking、content 或采样参数问题。
+`outputs/debug/` 会保存最近一次请求、prompt 和响应拆分结果，用于排查 prompt、thinking、content 或采样参数问题。下一步计划新增 `outputs/debug/retrieval_manifest.json`，专门记录检索注入来源和槽位占用。
+
+## Prompt Slot Model
+
+当前 prompt 结构可以按槽位理解，后续 System B 只补 Dynamic memory，不替代现有 System A：
+
+| 槽位 | 当前来源 | 作用 |
+|------|----------|------|
+| System/style | 固定 prompt / `style.md` | 长期写作规约、输出格式和文风约束 |
+| Canon memory | `data/story_bible/*.md` 稳定设定 | 世界观、角色基础事实、地点和物件 |
+| Dynamic memory | System B 生成 Markdown cards（待实现） | 章节后新增事实、状态变化、伏笔推进 |
+| Prior summary | `chapter_summaries.md` | 前情压缩，按 `max_chapter` 过滤 |
+| Author's Note | 用户本章大纲 / 续写方向 | 当前章方向、节奏、禁区 |
+| Recent context | `accepted_text` 尾部 | 续写衔接、当前视角和局部语气 |
+
+关键边界：System B 能增强事实连续性和检索可见性，但不能修复不稳定 adapter 的文风退化、乱跳剧情或格式失控。基础生成质量必须先稳定。
 
 ## Temporal Filtering（系统A，已实现）
 
@@ -257,8 +273,9 @@ python _test_eval_style.py
 
 - 零微调基线：style_score `50.92`，repetition_risk `high`，contamination_risk `low`。
 - v2：novel1 20 条样本，5 optimizer steps，`outputs/qlora_run_v2/`，style_score `60.48`，小样本链路通过。
-- v3：merged 544 条样本，136 optimizer steps，`outputs/qlora_run_v3/`，style_score `46.05`，扩样训练未通过。
-- v3 显存：`max_seq_length=1024` 时 forward/backward peak 约 `6.82GB`；样本数增加主要影响训练时长，不改变单步显存量级。
+- v3：merged 544 条样本，136 optimizer steps，`outputs/qlora_run_v3/`，style_score `46.05`，round2/3 严重崩溃，novel2 合并线已放弃。
+- v4：风丝引 57 条样本，45 optimizer steps，`outputs/qlora_run_v4/`，训练 loss 健康但评测未通过。坏触发点 style_score `39.41`，干净 ch1 起点 style_score `48.7361`，仍低于基线和 v2。
+- 当前主线：停止 v3 repeat，不导出 v4；先回退或重规划 QLoRA，让基础续写至少接近 v2。
 
 阶段4数据流：
 
@@ -282,7 +299,7 @@ train:
   -> outputs/qlora_run_v*/
 
 evaluate:
-  pipeline/generate_lora_multi.py
+  pipeline/generate_lora_multi.py / pipeline/adapter_cli.py
   -> outputs/lora_candidate_*.txt
   -> scripts/eval_draft.py
   -> outputs/*_eval.json
@@ -292,15 +309,15 @@ evaluate:
 样本契约：
 
 - novel1 样本保留真实推理结构相关字段，必须遵守 `target_chapter=N -> max_chapter=N-1`。
-- novel2 只用于文风学习，不接入 story_bible 检索，不要求时序 frontmatter。
-- 合并样本不压平原始字段，只新增统一追踪字段：`merged_sample_id`、`source_book`、`source_sample_id`、`source_section`、`source_section_confidence`、`content_sensitivity`、`content_sensitivity_confidence`。
+- novel2 合并线已放弃，`merged_train_samples.jsonl` 只保留备档，不再作为训练主线。
+- 若未来重新扩样，样本必须统一切分口径，避免 v3 中 novel1 60c 与 novel2 1000c 混用。
 - 标签文件不得保存原文片段，只保存 ID、标签和 confidence。
 
 当前诊断状态：
 
-- v3 失败主要来自句长异常与标点密度退化，而不是 repetition 或 contamination。
-- 训练数据按 `content_sensitivity` 分组的标点密度差异很小，已排除 explicit_sensitive 占比作为主要解释。
-- 当前需要完成同一个 v3 adapter 的重复生成诊断；若低标点密度稳定重现，再讨论 best checkpoint / 训练轮次 / 保存逻辑。
+- v3 已明确放弃，不再做 repeat2 或相关评测。
+- v4 不是单点叶欢线问题；排除“凰后/凤倾汐 -> 叶欢”触发后，干净 ch1 起点仍低于基线并出现格式失控、跳剧情和现代感词汇。
+- 下一步应先做训练/评测实验管理：固定 reference、prompt、采样参数、候选长度区间；每个 adapter 至少 repeat 2-3 次；记录 seed 或独立运行编号；加入标点密度、平均句长、最长句 quick eval。
 
 验收边界：
 
@@ -338,22 +355,42 @@ python scripts/add_frontmatter.py             # 确认后执行
 4. 同时用 `rg` 或 Python fallback 在 `config["paths"]["raw_data"]` 下搜索原文命中段落（不受 `max_chapter` 约束）。
 5. 另外从 `chapter_summaries.md` 中解析章节摘要，按 `chapter_number <= max_chapter` 过滤，返回前情提要文本。
 
-## System B Memory（延后）
+## Retrieval Debug Manifest（下一步）
 
-系统B是记忆闭环：用知识图谱或结构化写回驱动 `story_bible` 动态更新，而不是靠微调“记住”新事实。当前不作为主线推进；等阶段4微调链路确认能跑通、能提升文风后，再决定是否实现完整 `kg.json` 方案，或退回更轻的 BM25 + 结构化卡片方案。
+在 System B 前，优先增加轻量调试产物：
+
+```text
+outputs/debug/retrieval_manifest.json
+```
+
+建议记录字段：
+
+- 本次 `target_chapter` 与实际 `max_chapter`。
+- 注入的 story_bible 文件列表。
+- 每条为什么被注入：BM25、实体命中、章节摘要、raw grep 等。
+- 每个槽位的字符数和 token 估算。
+- 被 temporal filter 排除的条目数量。
+
+这个文件只用于可见性和诊断，不改变检索排序或 prompt 内容。它比 UI 更优先，因为长篇项目最怕“模型怎么知道这件事”的来源不透明。
+
+## System B Memory（待基础生成稳定后）
+
+系统B是记忆闭环：用结构化写回驱动 `story_bible` 动态更新，而不是靠微调“记住”新事实。它应在基础生成稳定后推进；第一版不做复杂 GraphRAG，只做朴素但可控的 `kg.json -> Markdown cards -> BM25`。
 
 当前状态：
 
 - `data/story_bible/kg.json` 尚不存在。
 - `scripts/kg_extract.py`、`scripts/kg_update.py`、`scripts/kg_render.py`、`scripts/update_kg.py` 尚未创建。
-- 后续目标是补齐 ch22-58 缺失角色，再支持写完第 N 章后把新增事实写回，并在第 N+1 章可检索。
+- `kg.json` 应作为事实源，Markdown 只是给现有 Retriever 读取的投影层。这样未来升级 vector/KG 时不用推翻数据。
+- 后续目标是支持写完第 N 章后把新增事实写回，并在第 N+1 章可检索。
 
 计划链路：
 
 ```text
 补存量：
-  原文 / 分析 JSON
+  已接受章节文本 / 原文
   → kg_extract.py
+  → kg_update.py
   → data/story_bible/kg.json
   → kg_render.py
   → data/story_bible/generated/.../*.md（含完整 frontmatter）
@@ -367,6 +404,24 @@ python scripts/add_frontmatter.py             # 确认后执行
 ```
 
 系统B脚本可以写入 `data/story_bible/kg.json` 和受影响的 story_bible Markdown 卡片，但必须保持 `revealed_in` / `valid_from` / `valid_to` 完整，并继续遵守 `data/` 不入 git 的素材保护规则。
+
+第一版 schema 建议包含：
+
+- `event`：发生了什么，在哪章，涉及谁。
+- `character_state`：角色身份、目标、伤势、情绪、立场变化。
+- `relationship_delta`：两人关系如何变化。
+- `location_state`：地点状态变化。
+- `plot_thread`：未解决伏笔和当前推进状态。
+- `evidence`：chapter、source_offset 或简短引用位置，不存长原文。
+- `valid_from` / `valid_to` / `confidence`：沿用 temporal 口径。
+
+关键规则：不要覆盖旧事实，写状态变化。角色立场变化时，旧状态 `valid_to=N-1`，新状态 `valid_from=N`。
+
+Prompt 注入优先级建议分三层：
+
+- chapter memory：每章抽取的原始结构化事件，只在局部相关时检索。
+- entity memory：按人物/地点/关系聚合后的当前状态，优先注入。
+- arc memory：每 5-10 章压缩一次的剧情线状态，优先注入。
 
 ## Change Boundaries
 

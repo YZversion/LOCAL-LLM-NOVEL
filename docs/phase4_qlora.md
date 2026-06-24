@@ -1,6 +1,6 @@
 # 阶段4：QLoRA 微调实验记录
 
-_最后更新：2026-06-23_
+_最后更新：2026-06-24_
 
 ---
 
@@ -42,7 +42,7 @@ _最后更新：2026-06-23_
 | v1 | novel1 20 条 | 2048 | 1000 | 1 | 5 | 5 | `outputs/qlora_run/` | 归档（warmup bug） |
 | v2 | novel1 20 条 | 1024 | 60 | 1 | 5 | 1 | `outputs/qlora_run_v2/` | 已通过 ✅ |
 | v3 | merged 544 条 | 1024 | 60/1000* | 1 | 136 | 7 | `outputs/qlora_run_v3/` | 放弃 ✗ |
-| v4 | 风丝引 57 条 | **1536** | **700** | **3** | **45** | **2** | `outputs/qlora_run_v4/` | 已训练 ✅ |
+| v4 | 风丝引 57 条 | **1536** | **700** | **3** | **45** | **2** | `outputs/qlora_run_v4/` | 已训练，评测未通过 ✗ |
 
 *v3 数据：novel1 用 context_chars=60，novel2 用 context_chars=1000（两种口径混入，是 v3 放弃原因之一）。
 
@@ -69,7 +69,7 @@ _最后更新：2026-06-23_
 结论：
 - 样本数增加主要影响训练时长，不显著改变单步显存峰值（Unsloth padding-free 按实际 token 数计算 VRAM）。
 - 1536 探针的 6.73GB 是**下界估算**：用的是旧 60c 样本（最长 942t）；新 700c 样本（最长 1460t）实际峰值估算约 7.3GB，仍在 8GB 预算内。
-- **建议**：v4 full-run 前用 `train_samples_full_57.jsonl` 再跑一次探针确认。
+- v4 full-run 已完成，1536 + 700c 在训练态可用；推理态长上下文另见“推理入口与显存”。
 
 ---
 
@@ -112,7 +112,7 @@ context_chars 历史对比：
 | v1 | `outputs/qlora_run/` | 归档 | warmup bug，loss 3.593 |
 | v2 | `outputs/qlora_run_v2/` | 已通过 | 20 条小样本，style_score 60.48 |
 | v3 | `outputs/qlora_run_v3/` | 未通过 | 544 条扩样，style_score 46.05 |
-| v4 | `outputs/qlora_run_v4/` | 待评测 🔜 | 57 条风丝引，45 steps，train_loss≈2.69 |
+| v4 | `outputs/qlora_run_v4/` | 未通过 | 57 条风丝引，45 steps，train_loss≈2.69，但生成不稳定 |
 
 v2 loss：
 
@@ -158,11 +158,12 @@ train_loss=2.599
 
 ## 评测结果
 
-| 指标 | 基线 | v2 | v3 |
-|------|------|----|----|
-| style_score | 50.92 | 60.48 | 46.05 |
-| repetition_risk | high (55.6%) | medium (16.7%) | medium (0.0%) |
-| contamination_risk | low | low | low |
+| 指标 | 基线 | v2 | v3 | v4 坏触发点 | v4 干净 ch1 起点 |
+|------|------|----|----|-------------|------------------|
+| 文件 | `draft_baseline_phase4.txt` | `lora_candidate_v2.txt` | `lora_candidate_v3.txt` | `adapter_candidate_v4_eval.txt` | `adapter_candidate_20260624_1114.txt` |
+| style_score | 50.92 | 60.48 | 46.05 | 39.41 | 48.7361 |
+| repetition_risk | high (55.6%) | medium (16.7%) | medium (0.0%) | medium | medium |
+| contamination_risk | low | low | low | low | low |
 
 v2 结论：
 - style_score 比基线提升 +9.56，阶段4小样本链路通过。
@@ -172,6 +173,53 @@ v3 结论：
 - 扩样训练没有带来进一步提升，style_score 低于 v2 和基线。
 - repetition 继续改善，但 sentence_profile 明显恶化。
 - 关键异常：average_sentence_length `83.39`，longest_sentence_length `471`。
+
+---
+
+## v4 评测结论
+
+### 坏触发点：凰后/凤倾汐 -> 叶欢
+
+- 候选：`outputs/adapter_candidate_v4_eval.txt`
+- 指标：`outputs/v4_eval_result.json`
+- style_score：`39.41`
+- 现象：从 ch58 附近“凰后/凤倾汐”结尾上文续写时，模型触发“凰后 -> 叶欢”强关联，切入叶欢修仙子线。
+- 根因判断：训练集中叶欢子线占 57 条 completion 的约 33%，但对话占比过高、修仙细节描写稀薄；模型用基座通用玄幻词汇补细节。
+- 训练数据外词汇：金丹、凝气、昆仑山脉等已确认不在训练 completion 中。
+
+### 干净 ch1 起点复测
+
+- 起始上文：`outputs/debug/test_context_ch1_clean.txt`
+- 候选：`outputs/adapter_candidate_20260624_1114.txt`
+- 指标：`outputs/v4_ch1_clean_eval.json`
+- style_score：`48.7361`，仍低于基线 `50.92` 和 v2 `60.48`
+- 人工核查问题：
+  - 开头出现标题样文本 `【太阳穴】`，违反正文补全格式。
+  - 擅自引入“帝后娘娘去世”、白衣仙子吹笛、落水少女、围观路人等剧情。
+  - 出现“戴着眼镜的老者”等明显不合原著语境的现代感词汇。
+  - 句子偏短、对白比例偏高，整体更像通用网文续写而非风丝引。
+
+### v4 总结
+
+v4 的训练 loss 与显存表现健康，但生成端不稳定。排除已知叶欢触发点后，基础续写仍不达标，因此 v4 当前配置不是“局部修叶欢线即可落地”的问题，而是 57 条 / 700c / 1536 / 3 epoch 方案整体需要回退或重规划。
+
+---
+
+## 推理入口与显存
+
+为避免 Web 会话历史污染和内网/proxy 限制，已新增独立评测入口：
+
+```powershell
+.venv-train\Scripts\Activate.ps1
+python pipeline/adapter_cli.py --adapter outputs/qlora_run_v4/ --context-file <context.txt> --max-seq-length 4096
+```
+
+已知结论：
+
+- 多轮 Web 会话会累积污染 `outputs/debug/last_prompt.txt`，评测必须用全新干净起点。
+- 无 FA2 环境下，长上下文推理会遇到真实 O(n^2) 显存压力；此前“FA2 缺失影响很小”的判断只适合短序列。
+- 当前安全推理配置：`max_seq_length=4096` + `MAX_RECENT_CHARS=800`。
+- `/reject` 路径含 `gc.collect()` + `torch.cuda.empty_cache()`，用于释放显存后重试。
 
 ---
 
@@ -200,24 +248,18 @@ v3 结论：
 
 结论：explicit_sensitive 比其他组只低约 4%-8%，远不足以解释 v3 生成端 66%-86% 的标点密度下降。
 
-### 当前待诊断
+### 最终决策
 
-- 用同一个 v3 adapter 重复生成 2 次，判断标点退化是否稳定。
-- `outputs/lora_candidate_v3_repeat1.txt` 已生成（约 3336c）。
-- `outputs/lora_candidate_v3_repeat2.txt` 尚未生成。
-- repeat1/repeat2 统计完成前，不直接进入 checkpoint 保存逻辑修改。
+- v3 已被用户明确放弃，不再继续 repeat2 或相关评测。
+- 放弃原因不是单纯 explicit_sensitive 占比，而是 novel2 分布与风丝引不兼容，并在 round2/3 出现角色错乱和区块链/AI 等技术术语。
+- `outputs/qlora_run_v3/` 与相关输出保留备档，不删除，不作为后续主线。
 
 ---
 
-## 下一步（v4 评测）
+## 下一步（QLoRA 重规划）
 
-1. ✅ 确认超参：`num_train_epochs=3`，`warmup_steps=2`
-2. ✅ v4 VRAM 探针（peak 7.38 GB PASS）
-3. ✅ full-run 训练（45 steps，adapter 已保存到 `outputs/qlora_run_v4/`）
-4. **后训练评测**（当前任务）：
-   ```powershell
-   # .venv-train 激活后
-   python pipeline/generate_lora_multi.py
-   python scripts/eval_draft.py --candidate <生成文件> --config config.yaml --out-json v4_eval.json
-   ```
-5. **验收目标**：style_score > 60.48（v2 基准）。
+1. 停止 v3 repeat 诊断，不继续 novel2 合并数据线。
+2. 不导出 v4，不接生产。
+3. 先回退或重规划 QLoRA，让基础续写稳定到至少接近 v2（style_score `60.48`）。
+4. 补训练/评测实验管理：固定 reference、prompt、采样参数、候选长度区间；每个 adapter 至少 repeat 2-3 次；记录 seed 或独立运行编号；纳入标点密度、平均句长、最长句 quick eval。
+5. 在 System B 前可先做轻量 `retrieval_manifest.json`，提高“模型为什么知道这件事”的可见性。

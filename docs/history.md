@@ -167,4 +167,35 @@ python scripts\eval_draft.py --config config.yaml --candidate <candidate.txt>
 - 最长句异常不是 `pipeline/eval_style.py` 分句逻辑漏切；候选文本本身缺少正常标点。
 - 训练数据 completion 按 `content_sensitivity` 分组统计后，explicit_sensitive 的句末标点密度约 `3.05/100字`，general 约 `3.18/100字`，mature_nonexplicit 约 `3.22/100字`。
 - 组间差异只有 4%-8%，不足以解释 v3 生成端 66%-86% 的标点密度退化。
-- 当前未能确认 v3 失败来自训练保存时机还是生成采样偶发异常；下一步需要完成同 adapter 的重复生成诊断。
+- 当前未能确认 v3 失败来自训练保存时机还是生成采样偶发异常；当时曾计划完成同 adapter 的重复生成诊断。此计划已被后续 v3 放弃决策覆盖，见下一节。
+
+---
+
+## 阶段4 v4 训练与评测结论（2026-06-23 至 2026-06-24）
+
+### v3 最终放弃
+
+- v3 后续 round2/3 生成严重崩溃，表现为角色错乱、混入区块链/AI 等与两本小说都无关的技术术语，以及超长无标点堆叠句。
+- 用户明确决定不再追究 v3 根因，停止 repeat 诊断，不继续 novel2 合并数据线。
+- `outputs/qlora_run_v3/` 和 `data/processed/merged_train_samples.jsonl` 保留备档，不删除、不再作为主线。
+
+### v4 训练完成
+
+- 数据：57 条风丝引样本，ch2-21 原有 20 条 + ch22-58 新增 37 条，统一使用 `context_chars=700`。
+- 新增角色卡：宁楚珣（revealed_in=42）、大理相（revealed_in=52），训练样本时序验证 57/57 通过。
+- 配置：`max_seq_length=1536`，`num_train_epochs=3`，`warmup_steps=2`。
+- 显存修复：设置 `UNSLOTH_CE_LOSS_TARGET_GB=0.5`，绕开 fused CE 的 mem_get_info 测量时机导致的 OOM。
+- 结果：45 optimizer steps 完成，loss 从 3.758 降到 2.223，adapter 保存到 `outputs/qlora_run_v4/`。
+
+### v4 评测未通过
+
+- 坏触发点评测：`outputs/adapter_candidate_v4_eval.txt` / `outputs/v4_eval_result.json`，style_score `39.41`。从 ch58 附近“凰后/凤倾汐”上文续写时触发“凰后 -> 叶欢”强关联，切入叶欢修仙子线，并出现训练数据外的通用玄幻词汇。
+- 干净 ch1 起点复测：`outputs/adapter_candidate_20260624_1114.txt` / `outputs/v4_ch1_clean_eval.json`，style_score `48.7361`，仍低于基线 `50.92` 和 v2 `60.48`。
+- 人工核查：候选出现标题样文本、擅自跳剧情、乱加人物、现代感词汇，说明 v4 不是单点叶欢线问题，而是当前配置整体不稳定。
+
+### 新路线
+
+1. 先回退或重规划 QLoRA，让基础续写稳定到至少接近 v2。
+2. 同时可先加轻量 debug：`outputs/debug/retrieval_manifest.json`。
+3. 再做 System B MVP：`kg.json -> Markdown cards -> BM25`。
+4. 等生成模型稳定后，再让 System B 承担长篇记忆闭环。

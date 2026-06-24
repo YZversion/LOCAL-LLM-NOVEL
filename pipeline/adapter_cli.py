@@ -12,12 +12,18 @@ Usage:
     python pipeline/adapter_cli.py --adapter outputs/qlora_run_v4/
     python pipeline/adapter_cli.py --adapter outputs/qlora_run_v4/ \\
         --context-file outputs/debug/test_context_ch1_clean.txt
+    python pipeline/adapter_cli.py --adapter outputs/qlora_run_v4/ \\
+        --raw-prompt-file outputs/eval_anchors/ch1_clean.txt
+    python pipeline/adapter_cli.py \\
+        --adapter huihui-ai/Huihui-Qwen3-8B-abliterated-v2 \\
+        --raw-prompt-file outputs/eval_anchors/ch1_clean.txt
 """
 import argparse
 import gc
 import sys
 from datetime import datetime
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
@@ -30,7 +36,7 @@ MAX_SEQ_LENGTH_INFER = 8192
 MAX_NEW_TOKENS       = 800
 TARGET_CHARS         = 2300
 MAX_ROUNDS           = 8
-MAX_RECENT_CHARS     = 2000
+MAX_RECENT_CHARS     = 800
 TEMPERATURE          = 0.8
 TOP_P                = 0.8
 TOP_K                = 20
@@ -234,24 +240,40 @@ def _print_final_summary(console, rounds_done, total_chars,
 # ── 主入口 ────────────────────────────────────────────────────────────────────
 
 def main() -> int:
+    global TEMPERATURE, TOP_P, TOP_K, REPETITION_PENALTY
+
     parser = argparse.ArgumentParser(description="LoRA adapter 交互式续写 CLI")
     parser.add_argument("--adapter", required=True,
-                        help="LoRA adapter 目录路径（必填）")
+                        help="LoRA adapter 目录路径，或可由 Unsloth 加载的基座模型名")
     parser.add_argument("--context-file", default=None,
                         help="初始上文 .txt 文件；不提供则交互粘贴")
+    parser.add_argument("--raw-prompt-file", default=None,
+                        help="完整 raw prompt .txt；启用后不走 Retriever/build_prompt")
     parser.add_argument("--max-rounds",    type=int, default=MAX_ROUNDS)
     parser.add_argument("--target-chars",  type=int, default=TARGET_CHARS)
     parser.add_argument("--max-seq-length",type=int, default=MAX_SEQ_LENGTH_INFER)
     parser.add_argument("--config",        default="config.yaml")
+    parser.add_argument("--seed",          type=int, default=None)
     args = parser.parse_args()
 
     from rich.console import Console
     from rich.panel import Panel
     console = Console()
 
+    if args.context_file and args.raw_prompt_file:
+        console.print("[red]ERROR: --context-file 与 --raw-prompt-file 只能二选一[/red]")
+        return 1
+    raw_prompt_mode = bool(args.raw_prompt_file)
+
     # ── 0. 前置检查 ───────────────────────────────────────────────────────────
     adapter_path = Path(args.adapter)
-    if not adapter_path.exists():
+    looks_local_path = (
+        "\\" in args.adapter
+        or args.adapter.startswith((".", "/"))
+        or re.match(r"^[A-Za-z]:", args.adapter)
+        or args.adapter.split("/", 1)[0] in {"outputs", "models"}
+    )
+    if looks_local_path and not adapter_path.exists():
         console.print(f"[red]ERROR: adapter 目录不存在: {adapter_path}[/red]")
         return 1
 
@@ -262,26 +284,43 @@ def main() -> int:
 
     import yaml
     cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+    gen_cfg = cfg.get("generation", {}) or {}
+    TEMPERATURE = gen_cfg.get("temperature", TEMPERATURE)
+    TOP_P = gen_cfg.get("top_p", TOP_P)
+    TOP_K = gen_cfg.get("top_k", TOP_K)
+    REPETITION_PENALTY = gen_cfg.get("repeat_penalty", REPETITION_PENALTY)
 
-    # ── 1. Retriever ──────────────────────────────────────────────────────────
-    console.print("[dim]--- 初始化 Retriever (BM25 + story_bible) ---[/dim]")
-    from cowriter.retriever import Retriever
-    retriever = Retriever(cfg)
-    console.print(f"[dim]  {len(retriever._docs)} bible docs indexed[/dim]")
+    retriever = None
+    if raw_prompt_mode:
+        console.print("[dim]--- Raw prompt mode: 跳过 Retriever / build_prompt ---[/dim]")
+    else:
+        # ── 1. Retriever ──────────────────────────────────────────────────────
+        console.print("[dim]--- 初始化 Retriever (BM25 + story_bible) ---[/dim]")
+        from cowriter.retriever import Retriever
+        retriever = Retriever(cfg)
+        console.print(f"[dim]  {len(retriever._docs)} bible docs indexed[/dim]")
 
     # ── 2. 加载模型 + adapter ─────────────────────────────────────────────────
     console.print(f"\n[bold]--- 加载模型 + adapter ---[/bold]")
-    console.print(f"[dim]  {adapter_path}/  max_seq_length={args.max_seq_length}[/dim]")
+    console.print(f"[dim]  {args.adapter}  max_seq_length={args.max_seq_length}[/dim]")
 
     from unsloth import FastLanguageModel
     with console.status("[green]Loading (4-bit)…[/green]", spinner="dots"):
         model, tokenizer = FastLanguageModel.from_pretrained(
-            model_name=str(adapter_path),
+            model_name=str(adapter_path if adapter_path.exists() else args.adapter),
             max_seq_length=args.max_seq_length,
             load_in_4bit=True,
             dtype=None,
         )
         FastLanguageModel.for_inference(model)
+
+    if args.seed is not None:
+        from transformers import set_seed
+        set_seed(args.seed)
+        console.print(
+            f"[dim]  generation params: seed={args.seed} temperature={TEMPERATURE} "
+            f"top_p={TOP_P} top_k={TOP_K} repetition_penalty={REPETITION_PENALTY}[/dim]"
+        )
 
     console.print("[green]  模型就绪。[/green]")
     alloc_gb = torch.cuda.memory_allocated() / 1024**3
@@ -297,7 +336,14 @@ def main() -> int:
 
     # ── 3. 初始上文 ───────────────────────────────────────────────────────────
     console.print("\n[bold]--- 初始上文 ---[/bold]")
-    if args.context_file:
+    if args.raw_prompt_file:
+        ctx_p = Path(args.raw_prompt_file)
+        if not ctx_p.exists():
+            console.print(f"[red]ERROR: --raw-prompt-file 不存在: {ctx_p}[/red]")
+            return 1
+        initial_context = ctx_p.read_text(encoding="utf-8").strip()
+        console.print(f"[dim]  从 raw prompt 文件加载: {ctx_p} ({len(initial_context)}c)[/dim]")
+    elif args.context_file:
         ctx_p = Path(args.context_file)
         if not ctx_p.exists():
             console.print(f"[red]ERROR: --context-file 不存在: {ctx_p}[/red]")
@@ -338,19 +384,25 @@ def main() -> int:
 
     # ── 5. 首轮 prompt 预览（自动展示，供用户确认上文干净）─────────────────
     console.print("\n[bold]--- 首轮 Prompt 结构（生成前确认）---[/bold]")
-    retrieval_init = retriever.retrieve(
-        initial_context[-MAX_RECENT_CHARS:], max_chapter=None
-    )
-    from cowriter.prompts import build_prompt
-    msgs_init = build_prompt(
-        recent_text=initial_context[-MAX_RECENT_CHARS:],
-        summary="",
-        retrieval=retrieval_init,
-        instruction="",
-        prior_summary="",
-    )
-    msgs_display = [m for m in msgs_init if m["role"] != "assistant"]
-    _show_prompt_panels(msgs_display, retrieval_init, console)
+    if raw_prompt_mode:
+        first_prompt = initial_context[-MAX_RECENT_CHARS:]
+        console.print(Panel(first_prompt, title="[yellow]RAW PROMPT[/yellow]",
+                            border_style="yellow", expand=True))
+        console.print(f"[dim]  Raw prompt chars: {len(first_prompt)} / {len(initial_context)}[/dim]")
+    else:
+        retrieval_init = retriever.retrieve(
+            initial_context[-MAX_RECENT_CHARS:], max_chapter=None
+        )
+        from cowriter.prompts import build_prompt
+        msgs_init = build_prompt(
+            recent_text=initial_context[-MAX_RECENT_CHARS:],
+            summary="",
+            retrieval=retrieval_init,
+            instruction="",
+            prior_summary="",
+        )
+        msgs_display = [m for m in msgs_init if m["role"] != "assistant"]
+        _show_prompt_panels(msgs_display, retrieval_init, console)
 
     input("\n按 Enter 开始生成，Ctrl+C 取消：")
 
@@ -377,16 +429,20 @@ def main() -> int:
         console.print(f'[dim]上文末尾: "…{tail}"  ({len(accumulated_text)}c)[/dim]')
 
         recent_text = accumulated_text[-MAX_RECENT_CHARS:]
-        retrieval   = retriever.retrieve(recent_text, max_chapter=None)
-        messages    = build_prompt(
-            recent_text=recent_text,
-            summary="",
-            retrieval=retrieval,
-            instruction="",
-            prior_summary="",
-        )
-        # build_prompt 可能附加 assistant prefill；生成时去掉
-        msgs_gen = [m for m in messages if m["role"] != "assistant"]
+        if raw_prompt_mode:
+            retrieval = {}
+            msgs_gen = [{"role": "user", "content": recent_text}]
+        else:
+            retrieval = retriever.retrieve(recent_text, max_chapter=None)
+            messages = build_prompt(
+                recent_text=recent_text,
+                summary="",
+                retrieval=retrieval,
+                instruction="",
+                prior_summary="",
+            )
+            # build_prompt 可能附加 assistant prefill；生成时去掉
+            msgs_gen = [m for m in messages if m["role"] != "assistant"]
 
         # token 估算
         try:
@@ -403,6 +459,11 @@ def main() -> int:
 
         # 生成
         console.print("[dim]  [正在生成…][/dim]")
+        if args.seed is not None:
+            console.print(
+                f"[dim]  generation params: seed={args.seed} temperature={TEMPERATURE} "
+                f"top_p={TOP_P} top_k={TOP_K} repetition_penalty={REPETITION_PENALTY}[/dim]"
+            )
         torch.cuda.reset_peak_memory_stats()
         new_text = _generate_one_round(model, tokenizer, msgs_gen)
         _vram_line(console)
@@ -460,6 +521,13 @@ def main() -> int:
 
             elif cmd in ("/reject", "/拒绝"):
                 console.print("[yellow]  [重新生成…][/yellow]")
+                if args.seed is not None:
+                    console.print(
+                        f"[dim]  generation params: seed={args.seed} temperature={TEMPERATURE} "
+                        f"top_p={TOP_P} top_k={TOP_K} repetition_penalty={REPETITION_PENALTY}[/dim]"
+                    )
+                gc.collect()
+                torch.cuda.empty_cache()
                 torch.cuda.reset_peak_memory_stats()
                 new_text = _generate_one_round(model, tokenizer, msgs_gen)
                 _vram_line(console)
@@ -472,12 +540,23 @@ def main() -> int:
             elif cmd.startswith("/retry") or cmd.startswith("/重试"):
                 prefix = "/retry" if cmd.startswith("/retry") else "/重试"
                 instr  = cmd[len(prefix):].strip()
-                retry_msgs = build_prompt(
-                    recent_text=recent_text, summary="",
-                    retrieval=retrieval, instruction=instr, prior_summary="",
-                )
-                retry_msgs = [m for m in retry_msgs if m["role"] != "assistant"]
+                if raw_prompt_mode:
+                    retry_text = recent_text if not instr else recent_text + "\n\n" + instr
+                    retry_msgs = [{"role": "user", "content": retry_text}]
+                else:
+                    retry_msgs = build_prompt(
+                        recent_text=recent_text, summary="",
+                        retrieval=retrieval, instruction=instr, prior_summary="",
+                    )
+                    retry_msgs = [m for m in retry_msgs if m["role"] != "assistant"]
                 console.print(f"[yellow]  [重新生成: {instr or '无附加指令'}][/yellow]")
+                if args.seed is not None:
+                    console.print(
+                        f"[dim]  generation params: seed={args.seed} temperature={TEMPERATURE} "
+                        f"top_p={TOP_P} top_k={TOP_K} repetition_penalty={REPETITION_PENALTY}[/dim]"
+                    )
+                gc.collect()
+                torch.cuda.empty_cache()
                 torch.cuda.reset_peak_memory_stats()
                 new_text = _generate_one_round(model, tokenizer, retry_msgs)
                 _vram_line(console)
@@ -488,7 +567,11 @@ def main() -> int:
                 continue
 
             elif cmd in ("/context", "/上下文"):
-                _show_prompt_panels(msgs_gen, retrieval, console)
+                if raw_prompt_mode:
+                    console.print(Panel(recent_text, title="[yellow]RAW PROMPT[/yellow]",
+                                        border_style="yellow", expand=True))
+                else:
+                    _show_prompt_panels(msgs_gen, retrieval, console)
                 continue
 
             elif cmd in ("/save", "/保存"):
